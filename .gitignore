@@ -1,0 +1,29 @@
+# ---- environments / caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- large artefacts (not in git)
+# Task 4 images: download from the Drive link in 04_image_classification/README.md
+04_image_classification/_download/
+# Task 4 checkpoints (~90-110 MB each): `gh release download t4-checkpoints -D outputs/models`
+outputs/models/
+*.pt
+*.pth
+*.ckpt
+
+# ---- logs: keep the Task 4 training histories (*.json, read by the notebooks), drop raw stdout logs
+outputs/logs/*.log
+outputs/logs/*.txt
+
+# ---- personal sandbox outputs (code and notebooks in experiments/ ARE committed)
+experiments/**/outputs/
+experiments/**/*.npz
+experiments/**/*.npy
+experiments/**/*.csv

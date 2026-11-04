@@ -1,0 +1,20 @@
+# Normalise line endings (the team works on Windows and macOS/Linux)
+* text=auto
+*.py text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.ipynb text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+
+# Data and binary artefacts: never touch line endings, never try to diff/merge
+*.csv -text
+*.npz binary
+*.npy binary
+*.db binary
+*.png binary
+*.jpg binary
+*.pdf binary
+
+# Generated notebooks: on a merge conflict keep one side, then rebuild (see README "Working together")
+*.ipynb merge=binary
