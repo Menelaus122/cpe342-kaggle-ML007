@@ -408,9 +408,18 @@ plt.tight_layout(); savefig(fig, "t2_fe_latent"); plt.show()
 md(r"""
 ## 4.3 Task 3: RFM proxies and monetary interactions
 Recency (`days_since_last_purchase`, recency ratios), frequency (`purchase_frequency`, transactions, sessions) and monetary terms (`log_hist`, `log_prev`, `prev_over_hist`, `hist_per_streak = historical_spending / daily_login_streak`, `txn_value_x_freq`), engagement × event terms (`event_x_session = event_participation_rate · avg_session_length`), and polynomial interactions of past spending (`prev_sq`, `prev_x_hist`, `prev_x_segment`).
+
+**Data repair before feature engineering.** Two facts about the raw columns are used. Neither uses the target or any test row for fitting:
+
+* **Exact identities within a row.** `historical_spending = total_transactions × avg_transaction_value` (relative error 2e-16), `purchases_on_discount = total_transactions × discount_rate_used`, and `prev_month_spending / historical_spending` always lies in 0.30–0.40. Each column is about 5.8% missing at random, so most gaps can be filled exactly from the same row (`task3.fill_identities`). The median ratio is used only when nothing exact is available.
+* **`segment` is a rule of the features.** It is set by `event_participation_rate` cut-offs plus `historical_spending`, and a classifier recovers it with hold-out accuracy 0.999. The 5.8% missing segments are filled by a classifier trained on training rows with a known segment (`task3.impute_segment`), and a `segment_imputed` flag is kept.
 """)
 code(r"""
-X3, y3, X3_test = task3.build(t3_train, t3_test)
+X3, y3, X3_test, repair3 = task3.build_repaired(t3_train, t3_test)
+print("values filled from identities (train):", repair3["fill_train"])
+print("values filled from identities (test): ", repair3["fill_test"])
+print(f"segment imputer hold-out accuracy: {repair3['segment_accuracy']:.4f} "
+      f"({int(X3.segment_imputed.sum()):,} train / {int(X3_test.segment_imputed.sum()):,} test rows filled)")
 new3 = [c for c in X3.columns if c not in t3_train.columns]
 spear = X3[new3].corrwith(pd.Series(y3), method="spearman").sort_values(key=np.abs, ascending=False)
 print(f"Task 3 matrix: {X3.shape}")

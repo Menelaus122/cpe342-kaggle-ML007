@@ -68,9 +68,9 @@ b["T2 raw"] = cached("t2_base_raw", lambda: run_cv("lgb", "multiclass", BASE, X2
 b["T2 FE"] = cached("t2_base_fe", lambda: run_cv("lgb", "multiclass", BASE, X2, y2, X2_test, folds2, n_classes=4, name="T2 FE"))
 b["T2 FE+TE"] = cached("t2_base_fe_te", lambda: run_cv("lgb", "multiclass", BASE, X2, y2, X2_test, folds2, n_classes=4,
                                                        fold_fn=task2.te_fold_fn, name="T2 FE+TE"))
-b["T3 raw (L1 log1p)"] = cached("t3_base_raw_log", lambda: run_cv("lgb", "regression", BASE, X3[raw3], np.log1p(y3), X3_test[raw3], folds3, name="T3 raw log"))
-b["T3 FE (L1 log1p)"] = cached("t3_base_fe_log", lambda: run_cv("lgb", "regression", BASE, X3, np.log1p(y3), X3_test, folds3, name="T3 FE log"))
-b["T3 FE (L1 raw THB)"] = cached("t3_base_fe_raw", lambda: run_cv("lgb", "regression", BASE, X3, y3, X3_test, folds3, name="T3 FE raw"))
+b["T3 raw (L1 log1p)"] = cached("t3r_base_raw_log", lambda: run_cv("lgb", "regression", BASE, X3[raw3], np.log1p(y3), X3_test[raw3], folds3, name="T3 raw log"))
+b["T3 FE (L1 log1p)"] = cached("t3r_base_fe_log", lambda: run_cv("lgb", "regression", BASE, X3, np.log1p(y3), X3_test, folds3, name="T3 FE log"))
+b["T3 FE (L1 raw THB)"] = cached("t3r_base_fe_raw", lambda: run_cv("lgb", "regression", BASE, X3, y3, X3_test, folds3, name="T3 FE raw"))
 
 rows = []
 for k in ("T1 raw", "T1 FE"):
@@ -89,7 +89,7 @@ md(r"""
 
 * **Task 1:** the engineered ratios leave AUC and F2 essentially unchanged. The signal is additive and noisy, and trees already find these interactions. We keep the features because the composite indices are useful for explanation.
 * **Task 2:** the latent-factor indices give a clear macro-F1 gain. Leakage-free in-fold target encoding of the nominal columns is neutral, which confirms the EDA verdict that they carry no information. The final GBDTs therefore rely on native categorical handling (CatBoost's ordered target statistics are themselves a leakage-free target encoding) instead of explicit TE columns.
-* **Task 3:** feature engineering helps. More interesting, **the L1 model fitted on raw THB beats the L1 model fitted on `log1p`**, although both estimate the conditional median. In log space every account's error weighs the same. On the raw scale, model capacity flows to the whales who dominate $\sum|y-\hat y|$, and that sum is exactly what NMAE measures.
+* **Task 3:** once the identity fill has repaired the raw spending columns (section 4.3), the engineered ratios add nothing to the `log1p` model (0.7830 raw vs 0.7823 with features). More interesting, **the L1 model fitted on raw THB beats the L1 model fitted on `log1p`** (0.7867), although both estimate the conditional median. In log space every account's error weighs the same. On the raw scale, model capacity flows to the whales who dominate $\sum|y-\hat y|$, and that sum is exactly what NMAE measures.
 
 ### 5.2 Task 4: per-fold learning curves of the fine-tuned backbones
 """)
@@ -179,7 +179,7 @@ md(r"""
 * **Near-inactive and silent accounts are invisible to all of them (≤ 0.22).** Their activity and chat levels sit only about 2 robust SDs below the median. In 70 dimensions they are swamped by accounts that are merely noisy, the classic weakness of distance and density scores on bounded features. Yet their gaps are unmistakable: zero accounts where hundreds are expected.
 * **LOF covers little of anything (≤ 0.29).** Local density ratios in 70 dimensions mostly react to noise.
 
-The gap-cluster detector therefore finds what the statistical detectors miss. The final decision (§7.5) still keeps the score ensemble and the hard-evidence rules alongside it, because under $F_3$ a missed anomaly costs far more than a false alarm.
+The gap-cluster detector therefore finds what the statistical detectors miss. §7.5 checks whether the score ensemble and the hard-evidence rules find anything *beyond* the families, since under $F_3$ a missed anomaly costs far more than a false alarm.
 """)
 
 # ============================================================ 6. hyperparameter tuning
@@ -191,7 +191,7 @@ Optuna's multivariate **Tree-structured Parzen Estimator** (Bayesian optimisatio
 
 * **Task 1:** $F_2$ *after* OOF threshold optimisation, so the search rewards ranking quality where it matters for the threshold. The stored study used the macro reading; both readings reward the same ranking quality, only the final threshold differs. `scale_pos_weight` (cost-sensitive learning) is part of the space.
 * **Task 2:** macro-$F_1$ of the argmax.
-* **Task 3:** NMAE of the L1 (median) model on raw THB.
+* **Task 3:** NMAE of the L1 (median) model on raw THB. Two hurdle components were tuned the same way (`experiments/claude/ag_t3_tune.py`, same folds): stage 1 for log-loss and the ratio stage 2 for L1 on the log ratio. Their parameters are stored in `outputs/params/task3_stage1.json` and `outputs/params/task3_ratio_stage2.json`.
 
 Studies run from `scripts/tune.py` (via `scripts/run_tuning.sh`) and persist in `outputs/optuna.db`. This section loads them, and runs them first if `RUN_OPTUNA=True`. Final models use the tuned parameters with **half the tuned learning rate** (early stopping then finds proportionally more trees), which usually adds a little accuracy at no tuning cost.
 """)
@@ -315,14 +315,15 @@ OTHER_AVG = "macro" if FBETA_AVERAGE == "binary" else "binary"
 THR1_alt, _ = optimize_threshold(y1, stack1_oof, 2.0, average=OTHER_AVG)
 grid, curve_main = threshold_curve(y1, stack1_oof, 2.0, FBETA_AVERAGE)
 _, curve_alt = threshold_curve(y1, stack1_oof, 2.0, OTHER_AVG)
-# One-standard-error rule (Breiman et al., 1984): thresholds whose OOF F2 lies within one bootstrap SE of the
-# optimum are statistically tied. Among them, take the one that is best under the other metric reading.
+# One-standard-error band (Breiman et al., 1984): thresholds whose OOF F2 lies within one bootstrap SE of the
+# optimum are statistically tied, so the exact choice inside the band matters little. The slides define the
+# positive-class F2, so we keep its OOF optimum. (v4 tried the band's macro-friendly end, 0.190, as a hedge
+# for the macro reading; that submission scored lower, see the README leaderboard log.)
 rng1 = np.random.default_rng(SEED)
 pred_opt1 = (stack1_oof >= THR1_opt).astype(int)
 SE1 = np.std([f2(y1[i], pred_opt1[i]) for i in (rng1.integers(0, len(y1), len(y1)) for _ in range(200))])
 tied1 = curve_main >= SCORE1_opt - SE1
-THR1 = float(grid[tied1][np.argmax(curve_alt[tied1])])
-SCORE1 = f2(y1, (stack1_oof >= THR1).astype(int))
+THR1, SCORE1 = THR1_opt, SCORE1_opt
 fig, ax = plt.subplots(figsize=(8.5, 3.4))
 ax.axvspan(grid[tied1].min(), grid[tied1].max(), color=CAT[0], alpha=0.08, lw=0)
 ax.plot(grid, curve_main, color=CAT[0], label=f"{AVG_NAME} F2 (optimised)")
@@ -335,7 +336,7 @@ ax.set_xlabel("probability threshold τ"); ax.set_ylabel("OOF score"); ax.set_ti
 ax.legend(loc="lower left"); plt.tight_layout(); savefig(fig, "t1_threshold"); plt.show()
 pred1 = (stack1_test >= THR1).astype(int)
 print(f"OOF {AVG_NAME} F2 at the default 0.5: {f2(y1, (stack1_oof >= 0.5).astype(int)):.4f} -> best {SCORE1_opt:.4f} at τ={THR1_opt:.3f}")
-print(f"one-SE plateau (SE = {SE1:.4f}): τ in [{grid[tied1].min():.3f}, {grid[tied1].max():.3f}] -> chosen τ={THR1:.3f}, {AVG_NAME} F2 {SCORE1:.4f}")
+print(f"one-SE plateau (SE = {SE1:.4f}): τ in [{grid[tied1].min():.3f}, {grid[tied1].max():.3f}] -> chosen τ={THR1:.3f} (the OOF optimum), {AVG_NAME} F2 {SCORE1:.4f}")
 print(f"regret check: at τ={THR1:.3f} the other reading ({OTHER_AVG}) scores {fbeta(y1, (stack1_oof >= THR1).astype(int), 2, OTHER_AVG):.4f} "
       f"vs {fbeta(y1, (stack1_oof >= THR1_alt).astype(int), 2, OTHER_AVG):.4f} at its own optimum τ={THR1_alt:.3f}")
 print(f"test flagged as cheaters: {pred1.mean():.2%} (train prevalence {y1.mean():.2%})")
@@ -395,44 +396,67 @@ The confusion matrix mirrors the 2×2 design. Almost all errors fall between seg
 Two-factor mistakes (Casual↔Whale, Grinder↔Social) are rare. The class multipliers slightly up-weight Social and Whale, trading a little Casual precision for minority-class recall, which is exactly what macro-F1 rewards.
 
 ## 7.3 Task 3: Monthly spending (NMAE)
-The level-1 pool mixes *median* estimators (the right target for absolute error) with structured alternatives:
+The level-1 pool mixes *median* estimators (the right target for absolute error) with structured alternatives. Every member uses the repaired features of section 4.3:
 
 * **L1 GBDTs on raw THB** (LightGBM, XGBoost, CatBoost-MAE) and **L1 LightGBM on `log1p`**.
-* **Two-stage hurdle (Cragg, 1971).** A classifier gives $p=P(y>0)$, and an L1 regressor on $\log(1+y)$ is fitted on spenders only. They are combined three ways:
+* **Two-stage hurdle (Cragg, 1971).** A classifier gives $p=P(y>0)$ (LightGBM, Optuna-tuned for log-loss). An L1 regressor fitted on spenders only gives the centre $\mu$ of $\log(1+y)$, either directly or through the **ratio target** $\log(1+y)-\log(1+b)$ for a base column $b$ (`historical_spending` or `prev_month_spending`).
+  * Spending is multiplicative: $y \approx b \times \text{segment factor} \times \text{noise}$. The within-segment spread (MAD) of $\log(y/b)$ is 0.205, versus 0.44–0.53 for $\log y$ itself, so the ratio target is much easier to learn.
+  * Ratio stage 2 is fitted with LightGBM (Optuna-tuned for L1, and default parameters), XGBoost and CatBoost.
+  * Rows without a usable base keep the plain hurdle's $\mu$.
+
+  Each stage 2 is combined with $p$ three ways:
   * **Mixture median** (MAE-optimal under a log-normal positive part): $\hat y = 0$ if $p\le 0.5$, else $\exp\!\big(\mu+\sigma\,\Phi^{-1}(1-\tfrac{0.5}{p})\big)-1$. The scale $\sigma$ and a gate shift are tuned on OOF NMAE.
   * **Hard gate:** $\hat y = 1[p>\tau]\,(e^{\mu}-1)$, with $\tau$ tuned on OOF.
   * **Expected value with Duan smearing,** $p\,(e^{\mu}\bar{e^{\varepsilon}}-1)$. This is the MSE-optimal recipe, shown for contrast.
 * **Tweedie GBDT** ($p=1.5$, log link): a mean estimator.
 
-These are blended with **non-negative weights that minimise total absolute error**, with the weights fitted out-of-fold. Two light post-processing steps follow:
+These are blended with **non-negative weights that minimise total absolute error**, with the weights fitted out-of-fold. Non-negative L1 blending is a linear program ($\min \sum(u+v)$ s.t. $Pw+u-v=y$, $w,u,v\ge 0$), so the weights are solved exactly with HiGHS instead of a local search (deterministic, and +0.00007 NMAE out-of-fold over the earlier Powell search). Two light post-processing steps follow:
 * a **median-consistent zero gate:** wherever the hurdle classifier gives $P(y>0)\le 0.5$, the conditional median is exactly 0, so the prediction is set to 0;
 * a single scale factor.
 """)
 code(r"""
+S1_3 = tuned("task3_stage1", {"learning_rate": 0.05})          # hurdle stage 1, Optuna-tuned for log-loss
+R2_3 = tuned("task3_ratio_stage2", {"learning_rate": 0.05})    # ratio stage 2, Optuna-tuned for L1 on the log ratio
+TW3 = {"learning_rate": 0.05, "objective": "tweedie", "tweedie_variance_power": 1.5, "metric": "l1"}
 m3 = {}
-r = cached("t3_lgb_raw", lambda: run_cv("lgb", "regression", P3_lgb, X3, y3, X3_test, folds3, name="T3 lgb L1 raw"))
+r = cached("t3r_lgb_raw", lambda: run_cv("lgb", "regression", P3_lgb, X3, y3, X3_test, folds3, name="T3 lgb L1 raw"))
 m3["LGB-L1 raw THB"] = (np.clip(r["oof"], 0, None), np.clip(r["test"], 0, None))
-r = cached("t3_xgb_raw", lambda: run_cv("xgb", "regression", P3_xgb, X3, y3, X3_test, folds3, name="T3 xgb L1 raw"))
+r = cached("t3r_xgb_raw", lambda: run_cv("xgb", "regression", P3_xgb, X3, y3, X3_test, folds3, name="T3 xgb L1 raw"))
 m3["XGB-L1 raw THB"] = (np.clip(r["oof"], 0, None), np.clip(r["test"], 0, None))
-r = cached("t3_cat_raw", lambda: run_cv("cat", "regression", {"learning_rate": 0.08, "depth": 8}, X3, y3, X3_test, folds3, name="T3 cat MAE"))
+r = cached("t3r_cat_raw", lambda: run_cv("cat", "regression", {"learning_rate": 0.08, "depth": 8}, X3, y3, X3_test, folds3, name="T3 cat MAE"))
 m3["Cat-MAE raw THB"] = (np.clip(r["oof"], 0, None), np.clip(r["test"], 0, None))
-r = cached("t3_lgb_log", lambda: run_cv("lgb", "regression", P3_lgb, X3, np.log1p(y3), X3_test, folds3, name="T3 lgb L1 log"))
+r = cached("t3r_lgb_log", lambda: run_cv("lgb", "regression", P3_lgb, X3, np.log1p(y3), X3_test, folds3, name="T3 lgb L1 log"))
 m3["LGB-L1 log1p"] = (np.clip(np.expm1(r["oof"]), 0, None), np.clip(np.expm1(r["test"]), 0, None))
-r = cached("t3_tweedie", lambda: run_cv("lgb", "regression", {"learning_rate": 0.05, "objective": "tweedie", "tweedie_variance_power": 1.5, "metric": "l1"},
-                                        X3, y3, X3_test, folds3, name="T3 tweedie"))
+r = cached("t3r_tweedie", lambda: run_cv("lgb", "regression", TW3, X3, y3, X3_test, folds3, name="T3 tweedie"))
 m3["LGB-Tweedie (mean)"] = (np.clip(r["oof"], 0, None), np.clip(r["test"], 0, None))
 
-h = cached("t3_hurdle", lambda: task3.hurdle_cv("lgb", X3, y3, X3_test, folds3, clf_params={"learning_rate": 0.05},
-                                                reg_params={"learning_rate": 0.05}))
-sigma0, smear = float(h["sigma"]), float(h["smear"])
-tm = task3.tune_mixture(y3, h["p_oof"], h["mu_oof"], sigma0)
-m3["Hurdle mixture-median"] = (task3.mixture_median(np.clip(h["p_oof"] + tm["shift"], 0, 1), h["mu_oof"], tm["sigma"]),
-                               task3.mixture_median(np.clip(h["p_test"] + tm["shift"], 0, 1), h["mu_test"], tm["sigma"]))
-th = task3.tune_hard_hurdle(y3, h["p_oof"], h["mu_oof"])
-m3["Hurdle hard gate"] = (task3.hard_hurdle(h["p_oof"], h["mu_oof"], th["tau"]), task3.hard_hurdle(h["p_test"], h["mu_test"], th["tau"]))
-m3["Hurdle E[y] + smearing"] = (task3.expected_value(h["p_oof"], h["mu_oof"], smear), task3.expected_value(h["p_test"], h["mu_test"], smear))
-print(f"hurdle: robust sigma={sigma0:.3f} -> tuned {tm['sigma']:.3f}, gate shift {tm['shift']:+.3f}; hard-gate tau={th['tau']:.3f}; smearing factor={smear:.3f}")
+# hurdle: one stage 1 shared by every stage 2
+h = cached("t3r_hurdle", lambda: task3.hurdle_cv("lgb", X3, y3, X3_test, folds3, clf_params=S1_3,
+                                                 reg_params={"learning_rate": 0.05}))
+RATIO3 = {"ratio[hist] LGB tuned": ("lgb", R2_3, "historical_spending"),
+          "ratio[prev] LGB tuned": ("lgb", R2_3, "prev_month_spending"),
+          "ratio[hist] LGB": ("lgb", {"learning_rate": 0.05}, "historical_spending"),
+          "ratio[prev] LGB": ("lgb", {"learning_rate": 0.05}, "prev_month_spending"),
+          "ratio[hist] XGB": ("xgb", {"learning_rate": 0.05}, "historical_spending"),
+          "ratio[hist] Cat": ("cat", {"learning_rate": 0.08, "depth": 8}, "historical_spending")}
+slug3 = lambda tag: "t3r_" + tag.replace("[", "_").replace("] ", "_").replace(" ", "_").lower()
+mu3 = {"Hurdle": (h["mu_oof"], h["mu_test"])}
+ratio3 = {}
+for tag, (kind, prm, bcol) in RATIO3.items():
+    ratio3[tag] = cached(slug3(tag), lambda: task3.ratio_stage2_cv(kind, prm, X3, y3, X3_test, folds3, bcol, h["mu_oof"], h["mu_test"]))
+    mu3[tag] = (ratio3[tag]["mu_oof"], ratio3[tag]["mu_test"])
+RO3 = {}
+for tag, (mu, mu_t) in mu3.items():
+    RO3[tag] = task3.readouts(y3, h["p_oof"], mu)
+    for ro_kind in ("mixture-median", "hard gate", "E[y] + smearing"):
+        m3[f"{tag} {ro_kind}"] = (task3.apply_readout(ro_kind, h["p_oof"], mu, RO3[tag]),
+                                  task3.apply_readout(ro_kind, h["p_test"], mu_t, RO3[tag]))
+ro = RO3["Hurdle"]
+print(f"hurdle: tuned sigma {ro['sigma']:.3f}, gate shift {ro['shift']:+.3f}; hard-gate tau={ro['tau']:.3f}; smearing factor={ro['smear']:.3f}")
 print(f"stage-1 AUC P(y>0): {roc_auc_score(y3 > 0, h['p_oof']):.4f}")
+pos3 = y3 > 0
+display(pd.DataFrame([[t, np.mean(np.abs(np.log1p(y3[pos3]) - mu3[t][0][pos3]))] for t in mu3],
+                     columns=["stage 2", "MAE of log1p(y) on spenders"]).set_index("stage 2").style.format("{:.4f}"))
 """)
 code(r"""
 names3 = list(m3)
@@ -442,12 +466,12 @@ P3t = np.column_stack([m3[k][1] for k in names3])
 # out-of-fold blending: weights fitted on 4 folds' OOF predictions, applied to the 5th
 blend_oof = np.zeros(len(y3))
 for tr, va in folds3:
-    w = task3.l1_blend_weights(y3[tr], [P3o[tr, j] for j in range(P3o.shape[1])])
+    w = task3.l1_blend_weights_exact(y3[tr], [P3o[tr, j] for j in range(P3o.shape[1])])
     blend_oof[va] = P3o[va] @ w
-W3 = task3.l1_blend_weights(y3, [P3o[:, j] for j in range(P3o.shape[1])])
+W3 = task3.l1_blend_weights_exact(y3, [P3o[:, j] for j in range(P3o.shape[1])])
 # median-consistent zero gate: if P(y>0) <= 0.5 the conditional median is exactly 0
-gate_oof = (np.clip(h["p_oof"] + tm["shift"], 0, 1) > 0.5).astype(float)
-gate_test = (np.clip(h["p_test"] + tm["shift"], 0, 1) > 0.5).astype(float)
+gate_oof = (np.clip(h["p_oof"] + RO3["Hurdle"]["shift"], 0, 1) > 0.5).astype(float)
+gate_test = (np.clip(h["p_test"] + RO3["Hurdle"]["shift"], 0, 1) > 0.5).astype(float)
 scales = np.linspace(0.85, 1.15, 61)
 sc_scores = [nmae(y3, blend_oof * s * gate_oof) for s in scales]
 SCALE3 = float(scales[int(np.argmax(sc_scores))])
@@ -460,7 +484,7 @@ rows += [["L1 blend (out-of-fold weights)", nmae(y3, blend_oof)],
          [f"+ scale {SCALE3:.3f} (final)", SCORE3]]
 display(pd.DataFrame(rows, columns=["model", "NMAE"]).set_index("model").style.format("{:.5f}").highlight_max(props="font-weight:bold"))
 print("full-data blend weights:", {k: round(float(w), 3) for k, w in zip(names3, W3) if w > 1e-3})
-summary.append(["Task 3", "NMAE", SCORE3, "L1/hurdle/Tweedie pool -> OOF L1 blend -> median zero gate -> scale"])
+summary.append(["Task 3", "NMAE", SCORE3, "repaired features; L1/hurdle/ratio-hurdle/Tweedie pool -> OOF L1 blend -> median zero gate -> scale"])
 
 fig, axes = plt.subplots(1, 2, figsize=(11.5, 3.5))
 hb = axes[0].hexbin(np.log1p(y3), np.log1p(blend_oof * SCALE3), gridsize=60, cmap=SEQ_CMAP, bins="log", mincnt=1)
@@ -551,12 +575,15 @@ plt.tight_layout(); savefig(fig, "t4_shift"); plt.show()
 """)
 
 md(r"""
-## 7.5 Task 5: Final decision (the F3-robust union of three lines of evidence)
+## 7.5 Task 5: Final decision (six families + one dependence pocket; score ensemble and rules as cross-checks)
 1. **Score ensemble.** Each retained detector's raw score is robust-z standardised (median/MAD) and the results are averaged (LOF excluded, §5.3). The knee (Kneedle) of the sorted log-excess marks where scores stop falling steeply.
 2. **Isolated tail clusters (§5.3).** Every account in a gap-separated family is flagged. Their membership needs no threshold choice: the gap *is* the threshold, and it is set by the data.
 3. **F3 asymmetry.** For a perfect ranker with true rate $r$ that flags a fraction $q$, $F_3(q) = \frac{10\,\min(q,r)/q}{9\,\min(q,r)/q + \min(q,r)/r}$. Missing anomalies is about 9× costlier than a false alarm, so a whole family the score ensemble cannot see (near-inactive, silent accounts) has to be caught by the family detector.
 4. **Ensemble alerts outside the families.** They are inspected below. Their largest robust z is modest, and they are enriched for the four yes/no flags only because the ensemble reads those flags as inputs. Outside the families the flags are statistically independent: the number of accounts with 0, 1, 2 or 3 flags matches the independence prediction almost exactly. So *statistically* they look like the noisy edge of normal behaviour.
-5. **But the labels are not ours to see.** Task 5 has no labels, and we cannot know whether the organisers' anomaly definition is the gap families, the multivariate outliers the score ensemble finds, or the hard-evidence rules (period-4 values outside the account's own history, impossible coordinates, the two bimodal gaps). The metric settles the decision. $F_3$ weighs recall 9× more than precision, and the Bayes-optimal $F_\beta$ decision flags every account whose anomaly probability exceeds $F^*/(1+\beta^2) \approx F^*/10$ (Lipton et al., 2014). An account that an independent line of evidence flags is far more likely than ~10% to be an anomaly under at least one plausible definition. We therefore flag the **union** of the three. The table below scores each candidate rule as if each of the others were the truth: the union is never far from the best, while committing to a single definition can lose about a quarter of the score.
+5. **Are the families complete?** The gap detector of §5.3 scans the raw columns. A planted behaviour could hide from it if it only shows up as a *change* against the account's own history. So we rerun the same detector on the derived per-account features: period-4 shift, jumps, burstiness, all-period levels and geo hops. Every isolated group it finds there lies inside the six families. Two independent views of the data agree that there is no further *gap-separated* population. Point 7 looks for a group that has no gap at all.
+6. **Union or families?** Task 5 has no labels, so we cannot see the organisers' anomaly definition. $F_3$ weighs recall 9× more than precision: the Bayes-optimal $F_\beta$ decision flags every account whose anomaly probability exceeds $F^*/(1+\beta^2) \approx F^*/10$ (Lipton et al., 2014). That argues for adding the ensemble and rule alerts *if* they have a real chance of being anomalies. The table below scores each candidate rule as if each of the others were the truth. The evidence says the extra alerts do not clear that bar: they look like the noisy edge of normal behaviour (point 4), and nothing outside the families forms a population (point 5). We therefore do not add them. A submission using the union (v4: public LB 0.69429 against 0.69663 for the families) agrees with this.
+7. **A group without a gap: dependence pockets.** A behaviour can be unusual in two features *at once* without being extreme in either, so it leaves no 1-D gap. Normal accounts draw their features almost independently: on a 20×20 quantile grid of a feature pair, every cell should then hold $n/400$ accounts. We scan all ~11,300 feature pairs outside the families (pairs built from the same behaviour, or from a built-in ratio such as km per login, are skipped) and record each pair's most over-full cell, $z = (\text{observed} - \text{expected})/\sqrt{\text{expected}}$. The noise level is the largest $z$ of the same scan on column-shuffled data, which keeps every marginal and destroys every group. Exactly **one** pocket clears it by far: very high match-to-match spread of KDA *and* of accuracy (erratic performance, e.g. a shared or boosted account). After flagging it, no pocket is left above the noise level.
+8. **A label-free cut-off for the pocket.** Score = the lower of the two rank percentiles (high only if both are high). Shuffling the columns again gives, for every cut-off $k$, the expected number of normal accounts among the top $k$; so $k$ minus that number estimates the true members, without labels. We choose $k$ to maximise the expected $F_3$, counting the families as true. Each flagged account then has a much higher chance of being anomalous than the $F^*/10$ bar of point 6. The final flags are the **six families plus the pocket**.
 """)
 code(r"""
 members = [k for k in det_scores if k != "LOF"]
@@ -595,7 +622,14 @@ nflag = Fl.sum(axis=1).astype(int).value_counts().reindex(range(5), fill_value=0
 display(pd.DataFrame({"accounts observed": nflag.values, "expected if independent": np.round(expd * len(Fl), 1)},
                      index=pd.Index(range(5), name="flags set")).T)
 
-# F3-robust decision: score each candidate rule as if each candidate were the ground truth
+# Completeness check: the same gap detector on the derived per-account features (period-4 change, jumps, levels, geo)
+Xd5 = X5.drop(columns=[c for c in X5.columns if c in task5.STATIC_COLS or c in ("n_flags", "n_missing")])
+gd_table, gd_masks = task5.gap_clusters(Xd5)
+gd_any = gd_masks.any(axis=1).values
+print(f"derived-feature gap scan: {len(gd_table)} isolated groups covering {gd_any.sum():,} accounts; "
+      f"outside the six families: {int((gd_any & ~gap5).sum())}")
+
+# Candidate rules, each scored as if each candidate were the ground truth
 rules5 = task5.evidence_rules(t5_test)
 rule5 = rules5.any(axis=1).values
 cands5 = {"gap families": gap5, "ensemble knee + evidence rules": flag_ml | rule5, "union of all three": gap5 | flag_ml | rule5}
@@ -603,8 +637,19 @@ truths5 = {"gap families": gap5, "ensemble knee + evidence rules": flag_ml | rul
 rob5 = pd.DataFrame({f"truth = {tn}": {dn: f3(t.astype(int), d.astype(int)) for dn, d in cands5.items()} for tn, t in truths5.items()})
 rob5["worst case"] = rob5.min(axis=1)
 rob5.insert(0, "accounts flagged", [int(d.sum()) for d in cands5.values()])
-display(rob5.style.format({c: "{:.3f}" for c in rob5.columns if c != "accounts flagged"}).highlight_max(subset=["worst case"], props="font-weight:bold"))
-flag5 = cands5["union of all three"]
+display(rob5.style.format({c: "{:.3f}" for c in rob5.columns if c != "accounts flagged"}))
+# point 7: blind dependence-pocket scan outside the families; point 8: label-free detector and cut-off
+scan5, noise5 = task5.dependence_pockets(X5, ~gap5)
+sig5 = scan5[scan5.z > noise5]
+print(f"dependence-pocket scan outside the families: {len(scan5):,} feature pairs; noise level (max z on shuffled data) "
+      f"{noise5:.1f}; pockets above it: {len(sig5)}")
+display(scan5.head(5).round(1))
+pocket_feats5 = sorted(set(sig5.a) | set(sig5.b))
+pocket5, pinfo5 = task5.pocket_detector(X5, gap5, pocket_feats5)
+print(f"pocket detector on {pocket_feats5}: estimated group size {pinfo5['group_size']:.0f}; cut-off k = {pinfo5['k']} "
+      f"(estimated members {pinfo5['est_tp']:.0f}, precision {pinfo5['precision']:.2f}); expected F3 families only "
+      f"{pinfo5['expected_f_known_only']:.3f} -> with the pocket {pinfo5['expected_f']:.3f}")
+flag5 = gap5 | pocket5
 pred5 = flag5.astype(int)
 fig, axes = plt.subplots(1, 2, figsize=(12.5, 3.6))
 ranks = np.arange(1, len(s_sorted) + 1) / len(s_sorted)
@@ -621,11 +666,10 @@ axes[1].plot(qs / r_true, task5.expected_fbeta(qs, r_true, 1), color=CAT[1], lab
 axes[1].set_xlabel("flagged fraction / true anomaly rate"); axes[1].set_ylabel("score of a perfect ranker")
 axes[1].set_title("Why F3 punishes missed anomalies"); axes[1].legend(loc="lower right")
 plt.tight_layout(); savefig(fig, "t5_threshold"); plt.show()
-print(f"FINAL Task 5 flags: {pred5.sum():,} = {pred5.mean():.2%} of accounts "
-      f"(families {gap5.sum():,} + {int((flag5 & ~gap5).sum()):,} from the score ensemble / evidence rules)")
-AGREE5 = rob5.loc["union of all three", "worst case"]
-summary.append(["Task 5", "worst-case F3 over 3 anomaly definitions", AGREE5,
-                "union: 6 gap families (1-D density-gap detector) + 6-detector ensemble knee + hard-evidence rules"])
+print(f"FINAL Task 5 flags: {pred5.sum():,} = {pred5.mean():.2%} of accounts (six gap-separated families {gap5.sum():,} + dependence pocket {pocket5.sum():,})")
+AGREE5 = roc_auc_score(gap5, consensus)
+summary.append(["Task 5", "ensemble ROC-AUC vs families (agreement)", AGREE5,
+                "6 gap-separated families (1-D density-gap detector) + 1 dependence pocket (2-D scan, permutation-null cut-off) + 6-detector ensemble cross-check"])
 """)
 
 md(r"""
@@ -668,27 +712,30 @@ changes.append(["Task 2", "labels changed", np.mean(pred2_final != pred2), ""])
 
 # ---- Task 3
 r = {}
-r["LGB-L1 raw THB"] = cached("t3_lgb_raw_full", lambda: refit_full("lgb", "regression", P3_lgb, X3, y3, X3_test, folds3, name="T3 lgb raw"))
-r["XGB-L1 raw THB"] = cached("t3_xgb_raw_full", lambda: refit_full("xgb", "regression", P3_xgb, X3, y3, X3_test, folds3, name="T3 xgb raw"))
-r["Cat-MAE raw THB"] = cached("t3_cat_raw_full", lambda: refit_full("cat", "regression", {"learning_rate": 0.08, "depth": 8}, X3, y3, X3_test, folds3, name="T3 cat"))
-r["LGB-L1 log1p"] = cached("t3_lgb_log_full", lambda: refit_full("lgb", "regression", P3_lgb, X3, np.log1p(y3), X3_test, folds3, name="T3 lgb log"))
-r["LGB-Tweedie (mean)"] = cached("t3_tweedie_full", lambda: refit_full("lgb", "regression", {"learning_rate": 0.05, "objective": "tweedie",
-                                 "tweedie_variance_power": 1.5, "metric": "l1"}, X3, y3, X3_test, folds3, name="T3 tweedie"))
-hf = cached("t3_hurdle_full", lambda: task3.hurdle_full("lgb", X3, y3, X3_test, folds3, {"learning_rate": 0.05}, {"learning_rate": 0.05}))
+r["LGB-L1 raw THB"] = cached("t3r_lgb_raw_full", lambda: refit_full("lgb", "regression", P3_lgb, X3, y3, X3_test, folds3, name="T3 lgb raw"))
+r["XGB-L1 raw THB"] = cached("t3r_xgb_raw_full", lambda: refit_full("xgb", "regression", P3_xgb, X3, y3, X3_test, folds3, name="T3 xgb raw"))
+r["Cat-MAE raw THB"] = cached("t3r_cat_raw_full", lambda: refit_full("cat", "regression", {"learning_rate": 0.08, "depth": 8}, X3, y3, X3_test, folds3, name="T3 cat"))
+r["LGB-L1 log1p"] = cached("t3r_lgb_log_full", lambda: refit_full("lgb", "regression", P3_lgb, X3, np.log1p(y3), X3_test, folds3, name="T3 lgb log"))
+r["LGB-Tweedie (mean)"] = cached("t3r_tweedie_full", lambda: refit_full("lgb", "regression", TW3, X3, y3, X3_test, folds3, name="T3 tweedie"))
+hf = cached("t3r_hurdle_full", lambda: task3.hurdle_full("lgb", X3, y3, X3_test, folds3, S1_3, {"learning_rate": 0.05}))
 full3 = {k: np.clip(v["test"], 0, None) for k, v in r.items()}
 full3["LGB-L1 log1p"] = np.clip(np.expm1(r["LGB-L1 log1p"]["test"]), 0, None)
-p_fin = blend_full(h["p_test"], hf["p_test"]); mu_fin = blend_full(h["mu_test"], hf["mu_test"])
+p_fin = blend_full(h["p_test"], hf["p_test"])
+mu_fin = {"Hurdle": blend_full(h["mu_test"], hf["mu_test"])}
+for tag, (kind, prm, bcol) in RATIO3.items():
+    rf = cached(slug3(tag) + "_full", lambda: task3.ratio_stage2_full(kind, prm, X3, y3, X3_test, folds3, bcol))
+    bt3 = np.log1p(X3_test[bcol].values)
+    ok3 = np.isfinite(bt3)
+    mu_fin[tag] = mu_fin["Hurdle"].copy()
+    mu_fin[tag][ok3] = bt3[ok3] + blend_full(ratio3[tag]["test"], rf["test"])[ok3]
 P3t_final = []
 for k in names3:
-    if k == "Hurdle mixture-median":
-        P3t_final.append(task3.mixture_median(np.clip(p_fin + tm["shift"], 0, 1), mu_fin, tm["sigma"]))
-    elif k == "Hurdle hard gate":
-        P3t_final.append(task3.hard_hurdle(p_fin, mu_fin, th["tau"]))
-    elif k == "Hurdle E[y] + smearing":
-        P3t_final.append(task3.expected_value(p_fin, mu_fin, smear))
+    tag = next((t for t in mu_fin if k.startswith(t + " ")), None)
+    if tag is not None:                                   # hurdle read-outs: recompute from the blended stage inputs
+        P3t_final.append(task3.apply_readout(k[len(tag) + 1:], p_fin, mu_fin[tag], RO3[tag]))
     else:
         P3t_final.append(blend_full(m3[k][1], full3[k]))
-gate_test_final = (np.clip(p_fin + tm["shift"], 0, 1) > 0.5).astype(float)
+gate_test_final = (np.clip(p_fin + RO3["Hurdle"]["shift"], 0, 1) > 0.5).astype(float)
 pred3_final = np.clip(np.column_stack(P3t_final) @ W3 * SCALE3, 0, None) * gate_test_final
 changes.append(["Task 3", "corr(log1p before, after)", np.corrcoef(np.log1p(pred3), np.log1p(pred3_final))[0, 1],
                 f"zero share {np.mean(pred3 == 0):.3f} -> {np.mean(pred3_final == 0):.3f}"])
@@ -849,11 +896,16 @@ order = gc_table.group.tolist()
 G = gc_masks[order].values[flagged]
 R5 = rules5.values[flagged]
 reason = pd.Series([gc_table.column[int(np.argmax(g))] if g.any() else
-                    (f"rule: {rules5.columns[int(np.argmax(r))]}" if r.any() else "score ensemble (multivariate)")
-                    for g, r in zip(G, R5)]).str.replace(r"_[1-4]$", "", regex=True)
+                    ("pocket: " + " x ".join(pocket_feats5) if pocket5[i] else
+                     f"rule: {rules5.columns[int(np.argmax(r))]}" if r.any() else "score ensemble (multivariate)")
+                    for i, g, r in zip(flagged, G, R5)]).str.replace(r"_[1-4]$", "", regex=True)
 drv = reason.value_counts().head(14).sort_values()
-fam_counts = pd.Series({**{k: int((m & (pred5 == 1)).sum()) for k, m in fam_mask.items()},
-                        "no family (ensemble / rules)": int((flag5 & ~gap5).sum())}).sort_values()
+fam_counts = pd.Series({k: int((m & (pred5 == 1)).sum()) for k, m in fam_mask.items()})
+if pocket5.any():
+    fam_counts["erratic performance (pocket)"] = int(pocket5.sum())
+if (flag5 & ~gap5 & ~pocket5).any():
+    fam_counts["no family (ensemble / rules)"] = int((flag5 & ~gap5 & ~pocket5).sum())
+fam_counts = fam_counts.sort_values()
 fig, axes = plt.subplots(1, 2, figsize=(13, 4))
 axes[0].barh(drv.index, drv.values, color=CAT[0], height=0.65); axes[0].set_title("Clearest reason for each alert (isolating column)")
 axes[0].tick_params(axis="y", labelsize=8)
@@ -868,9 +920,10 @@ md(r"""
 * **Takeover / VPN abuse** (teleporting logins with a currency drain, or with a purchase spike behind a VPN): freeze outgoing transfers, force a password reset, add step-up authentication, and re-price VPN purchases.
 * **Skill boost + friend purge** (sudden skill jump in the last period, friends removed): account sharing or selling. Review, and notify the owner.
 * **Bots** (one IP, clockwork login times, constant session length, flat KDA): rate-limit, then batch-ban by IP.
+* **Erratic performance** (the dependence pocket: KDA and accuracy swing far more from match to match than for any normal player): shared, boosted or resold accounts. Review; these alerts are the least certain (estimated precision about 0.5), which F3 accepts.
 * **Silent and near-inactive accounts** (no chat at all, or barely active in every period): farm and mule accounts. Watch for transfers into them.
 * **Erratic behaviour** (stability far below any normal player): resellers and shared accounts. Review.
-* **No family (ensemble or rule only):** the lowest-priority queue. These accounts are flagged because missing an anomaly costs far more than a review, but they are statistically closest to normal players.
+* **Ensemble or rule alerts outside the families** (not flagged in the submission): a low-priority watch list, since they are statistically closest to normal players.
 
 The current rule system has a 60% false-positive rate and treats every alert the same way. Typed, explained alerts let a small team triage efficiently. The family detector also needs no hand-set threshold: each gap in the data defines its own cut-off, so it adapts when behaviour drifts.
 """)
@@ -957,17 +1010,17 @@ md(r"""
 code(r"""
 board = pd.DataFrame(summary, columns=["task", "metric", "OOF score", "final recipe"]).set_index("task")
 display(board.style.format({"OOF score": "{:.4f}"}))
-print("Task 5 has no labels: its row is the worst-case F3 of the union rule if any one of three plausible anomaly definitions were the truth (a robustness check, not leaderboard accuracy).")
+print("Task 5 has no labels: its row is the agreement (ROC-AUC) between the score ensemble and the gap families, not an accuracy.")
 """)
 md(r"""
 ### Methodology recap
 | Task | Key insight | What moved the score |
 |---|---|---|
-| 1 Anti-cheat | Noisy additive signal; recall-weighted metric; test rows have fewer missing values | Cost-sensitive GBDTs (`scale_pos_weight` tuned) → 5-model stack → **threshold moving** on OOF (one-SE rule) |
+| 1 Anti-cheat | Noisy additive signal; recall-weighted metric; test rows have fewer missing values | Cost-sensitive GBDTs (`scale_pos_weight` tuned) → 5-model stack → **threshold moving** on OOF (optimum inside a flat one-SE band) |
 | 2 Segmentation | 2×2 latent design (engagement × spending) | **Noise-averaging latent indices**, ordinal tiers; stack + **class-wise multipliers** |
-| 3 Spending | NMAE ⇔ total absolute error ⇒ predict the **median** | L1 GBDTs on raw THB, **hurdle mixture-median**; OOF L1 blend, median-consistent zero gate, scale |
+| 3 Spending | NMAE ⇔ total absolute error ⇒ predict the **median**; spending ≈ history × segment factor × noise | **Data repair** (exact row identities, rule-based segment), **ratio-target hurdles** (LightGBM / XGBoost / CatBoost) with mixture-median read-out, L1 GBDTs on raw THB; OOF L1 blend, median-consistent zero gate, scale |
 | 4 Game title | Corrupted screenshots, 2:1 aspect; shifted test set | Aspect-preserving inputs, **GPU corruption-matched augmentation**, Mixup/CutMix, EMA, TTA; **CNN + ViT ensemble** for shift robustness |
-| 5 Security | Anomalies are **separate populations**: each family sits beyond an empty gap in some behaviour | **1-D density-gap detector** (expected-in-gap statistic) finds 6 families with no hand-set threshold; under $F_3$ the **union** with the score-ensemble knee and the hard-evidence rules is the robust decision |
+| 5 Security | Anomalies are **separate populations**: each family sits beyond an empty gap in some behaviour | **1-D density-gap detector** (expected-in-gap statistic) finds 6 families with no hand-set threshold; a second scan of the derived change features finds nothing outside them |
 
 For Tasks 1–4, the final test predictions average the 5-fold models with models **retrained on all labelled data** (Train+Val, per the rules, §7.6). Every decision rule keeps its out-of-fold value.
 

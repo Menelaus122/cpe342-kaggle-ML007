@@ -138,9 +138,9 @@ ABLATION = {
        '                                                       fold_fn=task2.te_fold_fn, name="T2 FE+TE"))\n'
        'display(pd.DataFrame([[k, "macro-F1 (argmax)", macro_f1(y2, b[k]["oof"].argmax(1))] for k in b], columns=["experiment", "metric", "OOF score"]))',
     3: 'raw3 = [c for c in t3_train.columns if c not in ("player_id", "spending_30d")]\nb = {}\n'
-       'b["T3 raw (L1 log1p)"] = cached("t3_base_raw_log", lambda: run_cv("lgb", "regression", BASE, X3[raw3], np.log1p(y3), X3_test[raw3], folds3, name="T3 raw log"))\n'
-       'b["T3 FE (L1 log1p)"] = cached("t3_base_fe_log", lambda: run_cv("lgb", "regression", BASE, X3, np.log1p(y3), X3_test, folds3, name="T3 FE log"))\n'
-       'b["T3 FE (L1 raw THB)"] = cached("t3_base_fe_raw", lambda: run_cv("lgb", "regression", BASE, X3, y3, X3_test, folds3, name="T3 FE raw"))\n'
+       'b["T3 raw (L1 log1p)"] = cached("t3r_base_raw_log", lambda: run_cv("lgb", "regression", BASE, X3[raw3], np.log1p(y3), X3_test[raw3], folds3, name="T3 raw log"))\n'
+       'b["T3 FE (L1 log1p)"] = cached("t3r_base_fe_log", lambda: run_cv("lgb", "regression", BASE, X3, np.log1p(y3), X3_test, folds3, name="T3 FE log"))\n'
+       'b["T3 FE (L1 raw THB)"] = cached("t3r_base_fe_raw", lambda: run_cv("lgb", "regression", BASE, X3, y3, X3_test, folds3, name="T3 FE raw"))\n'
        'display(pd.DataFrame([[k, "NMAE", nmae(y3, np.clip(b[k]["oof"] if "raw THB" in k else np.expm1(b[k]["oof"]), 0, None))] for k in b],\n'
        '                     columns=["experiment", "metric", "OOF score"]))',
 }
@@ -247,7 +247,7 @@ def task_cells(k):
 
     # 4. feature engineering
     fe_md = {1: "## 4.1 Task 1", 2: "## 4.2 Task 2", 3: "## 4.3 Task 3", 4: "## 4.4 Task 4", 5: "## 4.5 Task 5"}[k]
-    fe_code = {1: "X1, y1, X1_test = task1.build", 2: "X2, y2, X2_test = task2.build", 3: "X3, y3, X3_test = task3.build",
+    fe_code = {1: "X1, y1, X1_test = task1.build", 2: "X2, y2, X2_test = task2.build", 3: "X3, y3, X3_test, repair3 = task3.build_repaired",
                4: "aug = task4.GPUAugment()", 5: "X5, dev5 = task5.build_features"}[k]
     md(section(4, md_for_task(pick(fe_md, "markdown"), k)))
     code(pick(fe_code))
@@ -306,8 +306,8 @@ def task_cells(k):
         md(section(7, "Fold models of architecturally different backbones are averaged in probability space, and class-wise decision "
                       r"multipliers $\hat y=\arg\max_c w_c P_{ic}$ are tuned on the OOF blend for macro-$F_1$."))
     else:
-        md(section(7, "The unsupervised evidence (gap families, score ensemble, hard-evidence rules) is combined into one decision "
-                      "chosen for the $F_3$ metric."))
+        md(section(7, "The unsupervised evidence (gap families, score ensemble, hard-evidence rules) is weighed for the $F_3$ metric: "
+                      "the gap families are flagged, and the other two serve as cross-checks."))
     if k == 1:
         code(pick("def logit(p):")); code(pick("THR1_opt, SCORE1_opt = optimize_threshold"))
     elif k == 2:
@@ -343,8 +343,7 @@ def task_cells(k):
         md(section(8, "**Grad-CAM** (Selvaraju et al., 2017) on the last ConvNeXt stage shows which pixels drive each decision."))
         code(pick("cam_model = task4.create_model")); md(pick("**Business reading (game detection).**"))
     else:
-        md(section(8, "Every alert is explained by the behaviour that isolates it (the family's gap column), or by the evidence rule or "
-                      "score ensemble that raised it."))
+        md(section(8, "Every alert is explained by the behaviour that isolates it (the family's gap column)."))
         code(pick("flagged = np.where(pred5 == 1)[0]")); md(pick("**Business reading (security).**"))
 
     # 9. submission part

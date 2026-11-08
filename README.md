@@ -11,13 +11,13 @@ Our solution to the CPE342 (KMUTT, 1/2026) hackathon: **five machine-learning ta
 
 | # | Task | Type | Metric | Final recipe | OOF score |
 |---|------|------|--------|--------------|-----------|
-| 1 | Anti-cheat pre-filter | binary | $F_2$ (cheater) | LightGBM / XGBoost / CatBoost / ExtraTrees / LogReg → LogReg stacker → threshold τ = 0.190 (one-SE rule) | 0.8356 |
+| 1 | Anti-cheat pre-filter | binary | $F_2$ (cheater) | LightGBM / XGBoost / CatBoost / ExtraTrees / LogReg → LogReg stacker → threshold τ = 0.163 (OOF optimum) | 0.8369 |
 | 2 | Player segmentation | 4-class | $F_1$ (macro) | GBDTs + LogReg on latent engagement/spending indices → stacker → class-wise multipliers | 0.7549 |
-| 3 | 30-day spending | regression | NMAE score | L1 GBDTs, two-stage hurdle mixture-median, Tweedie → out-of-fold L1 blend → zero gate | 0.7892 |
+| 3 | 30-day spending | regression | NMAE score | repaired features (exact row identities, imputed segment) → L1 GBDTs, hurdles with a ratio-to-history stage 2 (LightGBM / XGBoost / CatBoost), Tweedie → out-of-fold L1 blend (exact LP) → median zero gate | 0.7942 |
 | 4 | Game title from screenshots | 5-class image | macro $F_1$ | ConvNeXt-Tiny + DeiT-III-S, 5-fold + full-data models, GPU augmentation, Mixup/CutMix, EMA, TTA | 0.9887 |
-| 5 | Account security | unsupervised | $F_3$ (anomaly) | union of 6 gap-separated anomaly families + score-ensemble knee + hard-evidence rules | no labels* |
+| 5 | Account security | unsupervised | $F_3$ (anomaly) | 6 gap-separated anomaly families (1,811 accounts); score ensemble and rules as cross-checks | no labels* |
 
-\*Task 5: 0.933 is the worst-case $F_3$ of our rule if any of three plausible anomaly definitions were the truth (a robustness check, not accuracy).
+\*Task 5 has no labels. A second gap scan of the derived change features finds no account outside the six families.
 
 ### Leaderboard log
 Add a row for **every** upload (we have a daily limit), then snapshot it (see [Versions](#versions-and-roll-back)).
@@ -27,12 +27,21 @@ Add a row for **every** upload (we have a daily limit), then snapshot it (see [V
 | 2026-11-03 | v1 | 0.59593 | first full pipeline (float labels) |
 | 2026-11-03 | v2 | 0.59610 | final models refit on Train+Val |
 | 2026-11-04 | v3 | **0.69663** | Task 1 threshold for positive-class $F_2$; Task 5 gap families; integer class codes |
-| — | v4 (current `submission.csv`) | not yet submitted | Task 5 F3-robust union (2,285 accounts); Task 1 τ 0.163 → 0.190 |
+| 2026-11-04 | v4 | 0.69429 | Task 5 union (2,285 accounts); Task 1 τ 0.163 → 0.190. Lower than v3: both hedges rolled back |
+| 2026-11-05 | v5 | 0.76 | **player_id leak test** (not in the pipeline): Task 2 = id block, Task 5 = top 8% of ids; Tasks 1/3/4 = v3. Allowed? TA question #6. Keep v3 as the final selection until they answer |
+| 2026-11-06 | v6 | 0.76202 | v5 + Task 3 round 2 (missing spending values rebuilt from exact row identities, whale-only model). Uses player_id like v5 |
+| 2026-11-06 | v7 | 0.76224 | v6 + Task 3 round 3 (ratio-to-history target, imputed segment; whale model dropped). Task 3 OOF 0.79331. Uses player_id like v5 |
+| 2026-11-06 | v8 | **0.76242** | v7 + Task 3 tuning (Optuna ratio stage 2, XGB/Cat ratio members). Task 3 OOF 0.79403. Uses player_id like v5 |
+| 2026-11-08 | v9 | **0.76242** | v8 with Task 3 from the merged pipeline (same recipe, retrained, exact LP blend; Task 3 OOF 0.79423). Same score as v8, as expected (+0.00004 predicted). Uses player_id like v5 |
+| — | current `submission.csv` | not uploaded | clean pipeline (no player_id): Tasks 1, 2, 4 = v3; **Task 3 = the v8 recipe, merged into the pipeline on 2026-11-08** (`task3.build_repaired`, ratio stage 2, exact L1 blend); Task 5 = families + dependence pocket (2,191 flags = 1,811 families + 380; blind 2-D scan + permutation-null cut-off, `src/task5.py`) |
 
 **Open questions for the TAs** (papit.vieng@kmutt.ac.th, phanita.siri@kmutt.ac.th):
 1. Task 4 label format (integer codes as in the datacard, or text such as `fiveN` as on the slide) and whether row *i* of Task 4's `test.csv` maps to `ANS{i}`.
 2. $F_2$ / $F_3$: positive class (slide formula) or macro?
 3. Task weights in the leaderboard average.
+4. Task 1's `train.csv` has 13,184 rows without a label. May they be used (semi-supervised), or should they be ignored as now?
+5. Task 5: which behaviours count as anomalous (e.g. do persistently near-inactive or silent accounts count)?
+6. `player_id` is not random. In Task 2 the segments sit in four id blocks (97% pure; using the id would raise OOF macro-F1 from 0.755 to 0.968). In Task 5 all anomalies sit in the top 8% of ids. May we use `player_id` as a feature? (Details: `experiments/claude/FINDINGS.md`.)
 
 `outputs/format_variants/` already holds the current predictions in the other conventions, ready for whatever they answer.
 
@@ -148,6 +157,14 @@ If git reports a conflict in an `.ipynb`, don't merge it by hand: accept either 
 |---|---|---|
 | `versions/v2_LB0.59610/` | 0.59610 | submission file only |
 | `versions/v3_LB0.69663/` | 0.69663 | code, notebook, cached predictions, figures, exact submission file |
+| `versions/v4_LB0.69429/` | 0.69429 | the same, for the Task 5 union / Task 1 τ = 0.190 variant |
+| `versions/v5_LB0.76/` | 0.76 | submission file + the script that makes it (player_id leak test) |
+| `versions/v6_LB0.76202/` | 0.76202 | submission file + scripts (Task 3 round 2 on the v5 file) |
+| `versions/v7_LB0.76224/` | 0.76224 | submission file + scripts (Task 3 round 3 on the v5 file) |
+| `versions/v8_LB0.76242/` | 0.76242 | submission file + scripts (Task 3 tuning on the v7 file) |
+| `versions/v9_LB0.76242/` | 0.76242 | uploaded file + the full pipeline state that produced its Task 3 column (code, notebooks, cached predictions, params); also the clean pipeline output |
+| `versions/pre_t3_merge_backup_2026-11-08/` | not uploaded | notebooks, submission parts and `submission.csv` just before Task 3 v8 was merged into the pipeline |
+
 
 To roll back, upload that folder's `submission.csv`, or copy its `src/`, `scripts/` and `outputs/` over the project root.
 

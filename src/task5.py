@@ -343,3 +343,103 @@ def expected_fbeta(rate_flagged, true_rate, beta=3.0):
     p, r = tp / rate_flagged, tp / true_rate
     b2 = beta ** 2
     return (1 + b2) * p * r / (b2 * p + r)
+
+
+# --------------------------------------------------------------------------- residual dependence pockets
+# A group that is unusual in two features at once, but not extreme in either, has no 1-D gap and hides from
+# gap_clusters. Normal accounts draw (almost) independent features, so on a quantile grid of a feature pair every
+# cell should hold n / G^2 accounts; a hidden group leaves a pocket of excess accounts in one cell.
+MECHANICAL_PAIRS = {frozenset(("geo", "login_count"))}      # km-per-login is computed from the login count
+
+
+def _base_feature(c):
+    import re
+    c = re.sub(r"_(level|cv|burst|maxjump|dev4|selfz4)$", "", c)
+    return "geo" if c.startswith("geo") else re.sub(r"_(mean|std)$", "", c)
+
+
+def _quantile_codes(R, G):
+    Q = np.full(R.shape, -1, dtype=np.int16)
+    for j in range(R.shape[1]):
+        v = R[:, j]
+        ok = ~np.isnan(v)
+        r = pd.Series(v[ok]).rank(pct=True, method="first").values
+        Q[ok, j] = np.minimum((r * G).astype(int), G - 1)
+    return Q
+
+
+def _shuffle_columns(R, rng):
+    return np.column_stack([rng.permutation(R[:, j]) for j in range(R.shape[1])])
+
+
+def _max_cell_z(R, cols, G):
+    Q = _quantile_codes(R, G)
+    base = [_base_feature(c) for c in cols]
+    out = []
+    for i in range(len(cols)):
+        for j in range(i + 1, len(cols)):
+            if base[i] == base[j] or frozenset((base[i], base[j])) in MECHANICAL_PAIRS:
+                continue                                     # same behaviour seen twice, or a built-in ratio
+            ok = (Q[:, i] >= 0) & (Q[:, j] >= 0)
+            cnt = np.bincount(Q[ok, i] * G + Q[ok, j], minlength=G * G).reshape(G, G).astype(float)
+            exp = np.outer(cnt.sum(1), cnt.sum(0)) / cnt.sum()
+            z = (cnt - exp) / np.sqrt(np.maximum(exp, 1))
+            k = int(np.argmax(z))
+            out.append((z.flat[k], cols[i], cols[j], k // G, k % G, cnt.flat[k], exp.flat[k]))
+    return pd.DataFrame(out, columns=["z", "a", "b", "bin_a", "bin_b", "observed", "expected"]).sort_values(
+        "z", ascending=False, ignore_index=True)
+
+
+def dependence_pockets(X, mask, G=20, n_null=2, seed=SEED):
+    """Blind scan of every feature pair among the accounts in `mask` (20x20 quantile grid). Returns the table of
+    each pair's most over-full cell, z = (observed - expected) / sqrt(expected), and the noise level: the largest
+    z of the same scan on column-shuffled data (every marginal kept, every group destroyed)."""
+    cols = [c for c in X.columns if pd.api.types.is_numeric_dtype(X[c]) and X[c].nunique() > 50]
+    R = X.loc[mask, cols].to_numpy(float)
+    rng = np.random.default_rng(seed)
+    noise = max(_max_cell_z(_shuffle_columns(R, rng), cols, G).z.max() for _ in range(n_null))
+    return _max_cell_z(R, cols, G), float(noise)
+
+
+def pocket_detector(X, known, feats, n_perm=300, max_k=3000, beta=3.0, seed=SEED):
+    """Label-free detector for a dependence pocket, with a label-free cut-off.
+
+    Score: min over `feats` of the rank percentile among accounts not in `known` (high = high in all features).
+    Null: the same score after shuffling each column independently, repeated n_perm times. For the top-k accounts
+    the expected number of NORMAL accounts is the mean shuffled count above the k-th score, so
+    est_TP(k) = k - that count, and the group size is estimated as max_k est_TP(k).
+    Cut-off: k maximising the expected positive-class F_beta, with the `known` accounts counted as true:
+        F(k) = (1 + b^2) (n_known + est_TP(k)) / (b^2 (n_known + G_hat) + n_known + k).
+    Returns (flags over all accounts, info dict)."""
+    rng = np.random.default_rng(seed)
+    known = np.asarray(known, bool)
+    rest = np.where(~known)[0]
+    U = X.loc[~known, feats].rank(pct=True).to_numpy()
+
+    def score(T):
+        with np.errstate(all="ignore"):
+            return np.nanmin(T, axis=1) + 1e-9 * np.nansum(T, axis=1)
+
+    S = score(U)
+    S = np.where(np.isnan(S), -np.inf, S)
+    order = np.argsort(-S)
+    Ss = S[order]
+    cnt = np.zeros(len(Ss))
+    for _ in range(n_perm):
+        Sp = score(_shuffle_columns(U, rng))
+        Sp = np.sort(np.where(np.isnan(Sp), -np.inf, Sp))
+        cnt += len(Sp) - np.searchsorted(Sp, Ss, side="left")
+    cnt /= n_perm
+    k = np.arange(1, len(Ss) + 1)
+    est = np.maximum.accumulate(k - cnt)
+    n_known = int(known.sum())
+    g_hat = float(est[:max_k].max())
+    b2 = beta ** 2
+    f = (1 + b2) * (n_known + est) / (b2 * (n_known + g_hat) + n_known + k)
+    k_star = int(np.argmax(f[:max_k])) + 1
+    flags = np.zeros(len(known), bool)
+    flags[rest[order[:k_star]]] = True
+    info = dict(k=k_star, group_size=g_hat, est_tp=float(est[k_star - 1]), precision=float(est[k_star - 1] / k_star),
+                expected_f=float(f[k_star - 1]), expected_f_known_only=float((1 + b2) * n_known / (b2 * (n_known + g_hat) + n_known)),
+                curve=pd.DataFrame({"k": k[:max_k], "est_tp": est[:max_k], "expected_f": f[:max_k]}))
+    return flags, info
