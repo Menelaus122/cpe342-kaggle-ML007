@@ -13,7 +13,7 @@ Our solution to the CPE342 (KMUTT, 1/2026) hackathon: **five machine-learning ta
 |---|------|------|--------|--------------|-----------|
 | 1 | Anti-cheat pre-filter | binary | $F_2$ (cheater) | LightGBM / XGBoost / CatBoost / ExtraTrees / LogReg on 49 features + RF / LightGBM / XGBoost / CatBoost on 24 raw columns with median imputation (last year's 1st-place recipe, 2 seeds each) → LogReg stacker → threshold τ = 0.150 (OOF optimum) | 0.8383 |
 | 2 | Player segmentation | 4-class | $F_1$ (macro) | GBDTs + LogReg on latent engagement/spending indices → stacker → class-wise multipliers | 0.7549 |
-| 3 | 30-day spending | regression | NMAE score | repaired features (exact row identities, imputed segment) → L1 GBDTs, hurdles with a ratio-to-history stage 2 (LightGBM / XGBoost / CatBoost), Tweedie → out-of-fold L1 blend (exact LP) → median zero gate | 0.7942 |
+| 3 | 30-day spending | regression | NMAE score | repaired features (exact row identities, imputed segment) → L1 GBDTs, hurdles with a ratio-to-history stage 2 (LightGBM / XGBoost / CatBoost), Tweedie; hurdle and the main ratio stages bagged over 10 seeds → out-of-fold L1 blend (exact LP) → median zero gate → cap at the training maximum | 0.7946 |
 | 4 | Game title from screenshots | 5-class image | macro $F_1$ | ConvNeXt-Tiny + DeiT-III-S, 5-fold + full-data models, GPU augmentation, Mixup/CutMix, EMA, TTA | 0.9887 |
 | 5 | Account security | unsupervised | $F_3$ (anomaly) | 6 gap-separated anomaly families (1,811 accounts) + dependence-pocket detector (380 more; blind 2-D scan, permutation-null cut-off) = 2,191 flags; score ensemble and rules as cross-checks | no labels* |
 
@@ -35,7 +35,9 @@ Add a row for **every** upload (we have a daily limit), then snapshot it (see [V
 | 2026-11-08 | v9 | **0.76242** | v8 with Task 3 from the merged pipeline (same recipe, retrained, exact LP blend; Task 3 OOF 0.79423). Same score as v8, as expected (+0.00004 predicted). Uses player_id like v5 |
 | 2026-11-08 | v10 | 0.76257 | v9 with Task 4 reordered to sorted image-filename order (user request). Task 4 still at chance (+0.00075 on Task 4, noise; a correct order would give ~0.91), so the key is in neither order. Not a real improvement. Uses player_id like v5 |
 | 2026-11-11 | v11 | **0.76242** | v9 with **Task 1 from round 11** (`submission_v11_try.csv`): 4 extra stack members built like last year's 1st-place team's (24 raw columns, median imputation; github.com/Saltywan/CPE342-KAGGLE). Nested OOF F2 0.8367 → 0.8383 (+0.0016, 95% CI [+0.0008, +0.0024], 5/5 folds, test-like +0.0023); 387 Task 1 labels differ from v9. Same public score as v9: the expected ~+0.0003 is below the public split's noise. Tasks 2–5 identical to v9. Uses player_id like v5 |
-| — | current `submission.csv` (= `submission_clean_try.csv`) | not uploaded | clean pipeline (no player_id): Task 1 = round 11 (above); Tasks 2, 4 = v3; **Task 3 = the v8 recipe, merged into the pipeline on 2026-11-08** (`task3.build_repaired`, ratio stage 2, exact L1 blend), with predictions capped at the training maximum of 300,000 since round 13 (OOF 0.79423 → 0.79434; one test row changes); Task 5 = families + dependence pocket (2,191 flags = 1,811 families + 380; blind 2-D scan + permutation-null cut-off, `src/task5.py`) |
+| 2026-11-11 | v12 | **0.76248** | v11 with **Task 3 predictions capped at the training maximum of 300,000** (`submission_v12_try.csv`): one test row changes (ANS14698, 431,946 → 300,000). Task 3 OOF 0.79423 → 0.79434 (+0.00011, 95% CI [+0.00003, +0.00021], 4/5 folds). Public score +0.00006, the size predicted if that row is in the public split. Tasks 1, 2, 4, 5 identical to v11. Uses player_id like v5 |
+| — | `submission_v13.csv` | not uploaded | v12 with **Task 3 from the 10-seed bag** (round 14, merged into the pipeline): both hurdle stages and the four ratio stage-2 models that carry the blend weight averaged over 10 model seeds; read-outs, blend weights, gate and scale re-learned out-of-fold. Task 3 OOF 0.79434 → 0.79458 (+0.00024, 95% CI [+0.00011, +0.00037], 5/5 folds). 12,945 Task 3 values change (median 16.5 THB); Tasks 1, 2, 4, 5 identical to v12. Expected public change about +0.00005, below the noise. Uses player_id like v5 |
+| — | current `submission.csv` (= `submission_clean_v13.csv`; before round 14 `submission_clean_try.csv`) | not uploaded | clean pipeline (no player_id): Task 1 = round 11 (above); Tasks 2, 4 = v3; **Task 3 = the v8 recipe, merged into the pipeline on 2026-11-08** (`task3.build_repaired`, ratio stage 2, exact L1 blend), capped at the training maximum of 300,000 since round 13, hurdle and main ratio stages bagged over 10 seeds since round 14 (OOF 0.79423 → 0.79434 → 0.79458); Task 5 = families + dependence pocket (2,191 flags = 1,811 families + 380; blind 2-D scan + permutation-null cut-off, `src/task5.py`) |
 
 **Open questions for the TAs** (papit.vieng@kmutt.ac.th, phanita.siri@kmutt.ac.th):
 1. Task 4 label format (integer codes as in the datacard, or text such as `fiveN` as on the slide) and whether row *i* of Task 4's `test.csv` maps to `ANS{i}`.
@@ -148,6 +150,7 @@ If git reports a conflict in an `.ipynb`, don't merge it by hand: accept either 
 
 ### Cached predictions
 `outputs/preds/<name>.npz` is reused whenever it exists. If you change a model or its features, **delete its cache file** (e.g. `outputs/preds/t2_lgb.npz`) so the notebook retrains it, and commit the new file. Task 4 caches come from `scripts/train_task4.py` (2–3 GPU hours per backbone).
+Task 3's 10-seed bag adds `t3r_hurdle[_full]_s<seed>.npz` and `t3r_ratio_*[_full]_s<seed>.npz` (9 extra seeds; seed 42 is the file without a suffix). Rebuilding them from scratch takes about 1¾ hours (`experiments/claude/by_r14_bag.py cv t3` and `full t3`, or simply delete them and run the notebook).
 
 ### Submitting to Kaggle
 1. Upload `submission.csv`. Only one person uploads per day: agree in chat first, because the team shares the daily limit.
@@ -168,6 +171,7 @@ If git reports a conflict in an `.ipynb`, don't merge it by hand: accept either 
 | `versions/v10_LB0.76257/` | 0.76257 | submission file + reorder script (Task 4 sorted-filename order test) |
 | `versions/v11_LB0.76242/` | 0.76242 | uploaded file (v9 + round-11 Task 1) + the full pipeline state that produced its Task 1 column (code, notebooks, cached predictions, params); also the clean pipeline output |
 | `versions/pre_round11_backup_2026-11-11/` | not uploaded | master and task notebooks, `nb_part2.py`, `task1.py`, submission parts and `submission.csv` just before the round-11 Task 1 members were merged |
+| `versions/v12_LB0.76248/` | 0.76248 | uploaded file (v11 + Task 3 cap on one row) + the full pipeline state that produced its Task 3 column; also the clean pipeline output |
 | `versions/pre_t3_merge_backup_2026-11-08/` | not uploaded | notebooks, submission parts and `submission.csv` just before Task 3 v8 was merged into the pipeline |
 
 

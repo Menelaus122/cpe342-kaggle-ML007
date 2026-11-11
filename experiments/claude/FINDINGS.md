@@ -797,3 +797,54 @@ stays the best combiner: it uses all nine members and is fitted, not searched.
 - Top 1% of absolute errors = 39.5% of total error, of which 47.7% is actual zeros (a whale who skips a month), the part already known to be unpredictable.
 - C1 on the test file: the target is capped at 300,000 (15 training rows sit exactly there). One v11 test prediction is above it (431,946). If that row's true value is at most 300,000, its error falls by exactly 131,946 THB whatever the true value is: about +0.0003 NMAE, about +0.00006 on the leaderboard if the row is scored. This is below the public-board noise (SD about 0.0004), so an upload could not confirm it.
 - **C1 merged into the pipeline** (`scripts/nb_part2.py`, section 7.4): out-of-fold cap = each fold's training maximum, test cap = `y3.max()`, applied after the scale and the zero gate. All six notebooks re-executed with no errors; Task 3 OOF reads 0.79434. Compared with the pre-cap outputs exactly one Task 3 row changed (ANS14698, 431,946.09 → 300,000) and Tasks 1, 2, 4, 5 are identical. `submission_v12_try.csv` = `submission_v11_try.csv` with only that value capped (one line differs from v11, sha256 `de380b025cdfe095154ffdfe5ef8d57fd7ed0e48160b90d3ceb94241ca29c384`). Clean pipeline `submission.csv` = `submission_clean_try.csv`, sha256 `061cb9866cab7de5d203799a890834c6a4186790e38ec107bf90bd9f33620b28`.
+
+## Round 14 (2026-11-11): v12 audit, Task 5 cut-off, Task 3 post-processing, 10-seed bagging (`bw_r14_audit.py`, `bx_r14_t3_post.py`, `by_r14_bag.py`, `bz_r14_eval.py`, `ca_r14_build_v13.py`, `cb_r14_cache_t3_bag.py`)
+
+v12 scored **0.76248** (+0.00006 over v11, exactly the cap's predicted effect, so the capped row is in the public split). **Rules kept:** every fit uses training rows only, test rows are only predicted, no upload variants.
+
+**1. v12 audit (`outputs/bw_r14_audit.log`).**
+
+| Task | OOF | Model / rule | v12 test predictions |
+|---|---|---|---|
+| 1 (F2) | 0.83829 at the OOF cut-off, 0.83794 nested | 9-member log-odds stack; LGB/XGB/Cat/ET 1 seed, the four 24-column members 2 seeds, LogReg deterministic; tau = 0.15035 | 15,690 ones (60.605%); train prevalence 34.93% |
+| 2 (macro-F1) | 0.96777 (clean pipeline 0.75359 nested) | id block, cuts 52,000 / 84,500 / 110,500; features unused | classes 0-3: 10,352 / 6,462 / 5,211 / 3,864 |
+| 3 (NMAE) | 0.79434, folds .7877/.7947/.7977/.8013/.7903 | blend, zero gate, scale 1.000, cap 300,000 | zeros 50.02% (OOF 49.89%, train 48.12%); sum 270,797,197 |
+| 5 (F3) | no labels | `id >= 23,819` | 2,070 ones (7.996%) |
+
+**2. Task 5 cut-off (`outputs/bw_r14_audit.log`): no change.** Equal weights put Task 5 at about 1.00 (Task 4 = 0.21). The 20 lowest family ids are consecutive from 23,819. The 500 ids below the cut: 0 family, 0 pocket, evidence-rule rate 0.2%, mean consensus rank 0.459 (control band 20,000-20,499: 0.478); the 500 above: 100% family. Change points: consensus 23,818, families 23,819, evidence rules 23,819. No impossible-travel or device-switch extreme lies outside the block; login-burst extremes do, but the earlier gap scan found no cluster there. Adding the 500 ids below costs 0.0236 F3 (LB -0.0047) if they are normal; break-even needs a 10% hit rate.
+
+**3. Task 3 zero-snap and joint scale (`outputs/bx_r14_t3_post.log`): no change.** Nested fine-grid zero-snap picks tau 0-2 THB: delta -0.000000, 0/5. Nested Nelder-Mead (tau, alpha): tau 0, alpha 1.0001-1.0005, +0.0000002, 3/5. In every prediction bin above 1 THB fewer than half the rows are y = 0, so snapping loses; sum(pred)/sum(y) = 1.0051.
+
+**4. 10-seed bagging (seeds 42, 100, 2026, 777, 999, 1234, 5555, 8888, 31415, 27182; features, hyper-parameters and folds unchanged).** Seed-42 refits equal the pipeline cache exactly (max diff 0; ET 3e-16). Classification: log-odds / log-probability averaging; Task 3: probability for stage 1, log scale for stage 2. Stacker, cut-off, multipliers, readouts, L1 weights, gate and scale are re-learned on the bagged OOF, nested.
+
+Task 1 (`outputs/bz_r14_eval_t1.log`; B0 nested 0.83794, fold std 0.00117, test-like 0.85046). Single-seed spread of the whole stack over the 10 seeds: mean 0.83788, std 0.00030 (0.83731-0.83831), so v12 is a typical draw.
+
+| Variant | nested F2 | delta | 95% CI | folds | fold std | test-like delta | Decision |
+|---|---|---|---|---|---|---|---|
+| 3-seed bag | 0.83835 | +0.00041 | [-0.00001, +0.00086] | 3/5 | 0.00158 | +0.00010 | discard |
+| 5-seed bag | 0.83829 | +0.00034 | [-0.00010, +0.00079] | 3/5 | 0.00129 | -0.00026 | discard |
+| 10-seed bag | 0.83833 | +0.00039 | [-0.00010, +0.00089] | 3/5 | 0.00141 | -0.00038 | discard |
+
+Task 3 (`outputs/bz_r14_eval_t3.log`; B0 = v12 members + cap, 0.79434, fold std 0.00491). Bagged: both hurdle stages and the four ratio stage-2 models with 99.9% of the blend weight; the two near-zero-weight ratio members stay single-seed.
+
+| Variant | NMAE | delta | 95% CI | folds | fold std | Decision |
+|---|---|---|---|---|---|---|
+| 3-seed bag | 0.79450 | +0.00016 | [+0.00005, +0.00027] | 4/5 | 0.00496 | passes |
+| 5-seed bag | 0.79452 | +0.00018 | [+0.00007, +0.00031] | 5/5 | 0.00495 | passes |
+| **10-seed bag** | **0.79458** | **+0.00024** | **[+0.00011, +0.00037]** | **5/5** | 0.00498 | **passes (used)** |
+
+Task 2 (clean fallback only; v12's Task 2 is the id block; `outputs/bz_r14_eval_t2.log`; B0 = clean pipeline, nested macro-F1 0.75359, fold std 0.00293). Bagged: LightGBM, XGBoost, CatBoost (geometric mean over seeds); LogReg stays; stacker and multipliers re-learned nested.
+
+| Variant | nested macro-F1 | delta | 95% CI | folds | fold std | Decision |
+|---|---|---|---|---|---|---|
+| 3-seed bag | 0.75376 | +0.00017 | [-0.00060, +0.00083] | 3/5 | 0.00171 | discard |
+| 5-seed bag | 0.75348 | -0.00012 | [-0.00082, +0.00059] | 3/5 | 0.00209 | discard |
+| 10-seed bag | 0.75369 | +0.00009 | [-0.00058, +0.00081] | 3/5 | 0.00196 | discard |
+
+Summary of step 4: only Task 3 passes. Tasks 1 and 2 stay as in v12 and in the clean pipeline.
+
+**5. v13 (`ca_r14_build_v13.py`, `outputs/ca_r14_build_v13.log`).** `submission_v13.csv` = v12 with only the Task 3 column replaced by the 10-seed bag, following the pipeline path (0.5 x 5-fold + 0.5 x Train+Val refit per seed, then the seed average). Checks before writing: the same code fed the cached v12 members reproduces the uploaded v12 Task 3 text on 25,889 of 25,889 rows; the seed-42 Train+Val refits equal the cache (diff 0); the bagged OOF equals the evaluation (0.794578). Re-learned blend: scale 1.000, gate shift -0.0004 (v12 +0.0010), weights ratio[hist] Cat 0.673, ratio[hist] XGB 0.195, ratio[prev] LGB tuned 0.133.
+- Rows differing from v12: task1 0, task2 0, **task3 12,945**, task4 0, task5 0. Task 3: median change on changed rows 16.53 THB, mean over all rows 67.83, p99 1,264, max 6,312; relative change on rows positive in both: median 0.53%, p95 1.87%; 8 rows 0 -> positive, 11 positive -> 0; zero share 0.5002 -> 0.5003; sum ratio 1.00015; max still 300,000; corr(log1p) 0.99936.
+- `submission_v13.csv` sha256 `538d250be0078afed41090a0290148e78a83a62465cfeb9271468c729d40c76a`; `submission_clean_v13.csv` (clean fallback + the same Task 3) sha256 `7239937c8c925deba9b1a50f84facceef4f498e992662b1e09f493620b9728e6`.
+- Expected leaderboard effect at equal weights: +0.00005, below the public-board noise. The decision rests on the out-of-fold evidence, not on the public score.
+- **Merged into the pipeline** (`scripts/nb_part2.py`, sections 7.3 and 7.6; user-approved): `SEEDS3`, per-seed caches `t3r_*_s<seed>` copied from the bag run by `cb_r14_cache_t3_bag.py` (seed-42 files equal the existing cache; the notebook lambdas recompute any missing seed with the same parameters). All six notebooks re-executed, 0 error outputs; the Task 3 cell reads 0.79458 with the weights above. The pipeline `submission.csv` matched `ca_r14_build_v13.py` except 69 Task 3 values that differ by exactly 0.01 THB (seed averaging in a different floating-point order), so the final files take Task 3 from the pipeline (`cc_r14_v13_from_pipeline.py`): `submission_v13.csv` sha256 `c878a5677f4bab1a30134ae6d795bbc5cff265483b73fc34a008e47c63625eb0` (v12 + pipeline Task 3; same diff counts as above), `submission_clean_v13.csv` = `submission.csv` sha256 `bf4c4a364cf0c35b2518b8776b77823e1bbc288d9bfead45b33efd9f448c72f2`. The three format-variant files change in Task 3 only. The earlier sha256 values in this item are superseded.

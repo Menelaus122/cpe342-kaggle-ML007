@@ -418,6 +418,7 @@ The level-1 pool mixes *median* estimators (the right target for absolute error)
   * Spending is multiplicative: $y \approx b \times \text{segment factor} \times \text{noise}$. The within-segment spread (MAD) of $\log(y/b)$ is 0.205, versus 0.44–0.53 for $\log y$ itself, so the ratio target is much easier to learn.
   * Ratio stage 2 is fitted with LightGBM (Optuna-tuned for L1, and default parameters), XGBoost and CatBoost.
   * Rows without a usable base keep the plain hurdle's $\mu$.
+  * **10-seed bagging.** Both hurdle stages and the four ratio stage-2 models that carry the blend weight are trained with 10 seeds (same features, hyper-parameters and folds; only the model seed changes) and averaged: $p$ as a probability, $\mu$ on the log scale. Read-outs, blend weights, gate and scale are learned on the bagged out-of-fold predictions. Nested out-of-fold gain +0.00024 NMAE, 95% CI [+0.00011, +0.00037], 5/5 folds better. The two ratio members with almost no blend weight keep a single seed (and the single-seed hurdle's $\mu$ as their fallback).
 
   Each stage 2 is combined with $p$ three ways:
   * **Mixture median** (MAE-optimal under a log-normal positive part): $\hat y = 0$ if $p\le 0.5$, else $\exp\!\big(\mu+\sigma\,\Phi^{-1}(1-\tfrac{0.5}{p})\big)-1$. The scale $\sigma$ and a gate shift are tuned on OOF NMAE.
@@ -446,9 +447,16 @@ m3["LGB-L1 log1p"] = (np.clip(np.expm1(r["oof"]), 0, None), np.clip(np.expm1(r["
 r = cached("t3r_tweedie", lambda: run_cv("lgb", "regression", TW3, X3, y3, X3_test, folds3, name="T3 tweedie"))
 m3["LGB-Tweedie (mean)"] = (np.clip(r["oof"], 0, None), np.clip(r["test"], 0, None))
 
-# hurdle: one stage 1 shared by every stage 2
-h = cached("t3r_hurdle", lambda: task3.hurdle_cv("lgb", X3, y3, X3_test, folds3, clf_params=S1_3,
-                                                 reg_params={"learning_rate": 0.05}))
+# hurdle: one stage 1 shared by every stage 2, bagged over 10 model seeds (seed 42 = the original single-seed run)
+SEEDS3 = (42, 100, 2026, 777, 999, 1234, 5555, 8888, 31415, 27182)
+sfx3 = lambda s: "" if s == 42 else f"_s{s}"
+seed_kw3 = lambda kind, s: {"random_seed": s} if kind == "cat" else {"random_state": s}
+bag_mean = lambda runs, keys: {k: np.mean([r[k] for r in runs], axis=0) for k in keys}
+hs = {s: cached(f"t3r_hurdle{sfx3(s)}", lambda s=s: task3.hurdle_cv("lgb", X3, y3, X3_test, folds3, clf_params={**S1_3, "random_state": s},
+                                                                     reg_params={"learning_rate": 0.05, "random_state": s}, verbose=False))
+      for s in SEEDS3}
+h = bag_mean(hs.values(), ("p_oof", "mu_oof", "p_test", "mu_test"))
+BAG3 = ("ratio[hist] LGB tuned", "ratio[prev] LGB tuned", "ratio[hist] XGB", "ratio[hist] Cat")   # 99.9% of the single-seed blend weight
 RATIO3 = {"ratio[hist] LGB tuned": ("lgb", R2_3, "historical_spending"),
           "ratio[prev] LGB tuned": ("lgb", R2_3, "prev_month_spending"),
           "ratio[hist] LGB": ("lgb", {"learning_rate": 0.05}, "historical_spending"),
@@ -459,7 +467,12 @@ slug3 = lambda tag: "t3r_" + tag.replace("[", "_").replace("] ", "_").replace(" 
 mu3 = {"Hurdle": (h["mu_oof"], h["mu_test"])}
 ratio3 = {}
 for tag, (kind, prm, bcol) in RATIO3.items():
-    ratio3[tag] = cached(slug3(tag), lambda: task3.ratio_stage2_cv(kind, prm, X3, y3, X3_test, folds3, bcol, h["mu_oof"], h["mu_test"]))
+    if tag in BAG3:   # each seed's ratio model falls back to the same seed's hurdle mu
+        ratio3[tag] = bag_mean([cached(slug3(tag) + sfx3(s), lambda s=s: task3.ratio_stage2_cv(kind, {**prm, **seed_kw3(kind, s)}, X3, y3, X3_test, folds3, bcol,
+                                                                                                hs[s]["mu_oof"], hs[s]["mu_test"])) for s in SEEDS3],
+                               ("mu_oof", "mu_test", "test"))
+    else:
+        ratio3[tag] = cached(slug3(tag), lambda: task3.ratio_stage2_cv(kind, prm, X3, y3, X3_test, folds3, bcol, hs[42]["mu_oof"], hs[42]["mu_test"]))
     mu3[tag] = (ratio3[tag]["mu_oof"], ratio3[tag]["mu_test"])
 RO3 = {}
 for tag, (mu, mu_t) in mu3.items():
@@ -742,16 +755,24 @@ r["XGB-L1 raw THB"] = cached("t3r_xgb_raw_full", lambda: refit_full("xgb", "regr
 r["Cat-MAE raw THB"] = cached("t3r_cat_raw_full", lambda: refit_full("cat", "regression", {"learning_rate": 0.08, "depth": 8}, X3, y3, X3_test, folds3, name="T3 cat"))
 r["LGB-L1 log1p"] = cached("t3r_lgb_log_full", lambda: refit_full("lgb", "regression", P3_lgb, X3, np.log1p(y3), X3_test, folds3, name="T3 lgb log"))
 r["LGB-Tweedie (mean)"] = cached("t3r_tweedie_full", lambda: refit_full("lgb", "regression", TW3, X3, y3, X3_test, folds3, name="T3 tweedie"))
-hf = cached("t3r_hurdle_full", lambda: task3.hurdle_full("lgb", X3, y3, X3_test, folds3, S1_3, {"learning_rate": 0.05}))
+hfs = {s: cached(f"t3r_hurdle_full{sfx3(s)}", lambda s=s: task3.hurdle_full("lgb", X3, y3, X3_test, folds3, {**S1_3, "random_state": s},
+                                                                          {"learning_rate": 0.05, "random_state": s}))
+       for s in SEEDS3}
+hf = bag_mean(hfs.values(), ("p_test", "mu_test"))   # blend_full is linear, so bagging after blending gives the same result
 full3 = {k: np.clip(v["test"], 0, None) for k, v in r.items()}
 full3["LGB-L1 log1p"] = np.clip(np.expm1(r["LGB-L1 log1p"]["test"]), 0, None)
 p_fin = blend_full(h["p_test"], hf["p_test"])
 mu_fin = {"Hurdle": blend_full(h["mu_test"], hf["mu_test"])}
+mu_fin_42 = blend_full(hs[42]["mu_test"], hfs[42]["mu_test"])   # fallback of the single-seed ratio members
 for tag, (kind, prm, bcol) in RATIO3.items():
-    rf = cached(slug3(tag) + "_full", lambda: task3.ratio_stage2_full(kind, prm, X3, y3, X3_test, folds3, bcol))
+    if tag in BAG3:
+        rf = bag_mean([cached(slug3(tag) + "_full" + sfx3(s), lambda s=s: task3.ratio_stage2_full(kind, {**prm, **seed_kw3(kind, s)}, X3, y3, X3_test, folds3, bcol))
+                       for s in SEEDS3], ("test",))
+    else:
+        rf = cached(slug3(tag) + "_full", lambda: task3.ratio_stage2_full(kind, prm, X3, y3, X3_test, folds3, bcol))
     bt3 = np.log1p(X3_test[bcol].values)
     ok3 = np.isfinite(bt3)
-    mu_fin[tag] = mu_fin["Hurdle"].copy()
+    mu_fin[tag] = (mu_fin["Hurdle"] if tag in BAG3 else mu_fin_42).copy()
     mu_fin[tag][ok3] = bt3[ok3] + blend_full(ratio3[tag]["test"], rf["test"])[ok3]
 P3t_final = []
 for k in names3:
