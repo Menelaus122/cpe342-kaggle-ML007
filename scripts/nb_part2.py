@@ -28,7 +28,7 @@ Results are cached in `outputs/preds/*.npz`, so re-running the notebook is fast.
 """)
 code(r"""
 from sklearn.metrics import roc_auc_score, confusion_matrix, f1_score
-from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.impute import SimpleImputer
@@ -260,7 +260,7 @@ md(r"""
 <a id="7"></a>
 # 7. Stacking Ensemble (K-Fold) & Metric-Aware Post-Processing
 
-**Level 1:** diverse model families trained on identical folds: three GBDTs with different tree-growth biases (LightGBM leaf-wise, XGBoost depth-wise, CatBoost oblivious trees), plus a bagged randomised-tree ensemble (ExtraTrees) and a linear model (logistic regression on Gaussian-rank features).
+**Level 1:** diverse model families trained on identical folds: three GBDTs with different tree-growth biases (LightGBM leaf-wise, XGBoost depth-wise, CatBoost oblivious trees), plus a bagged randomised-tree ensemble (ExtraTrees) and a linear model (logistic regression on Gaussian-rank features). Task 1 adds four members built the way last year's 1st-place team built theirs (CPE342 1/2025, public repo [Saltywan/CPE342-KAGGLE](https://github.com/Saltywan/CPE342-KAGGLE)): Random Forest, LightGBM, XGBoost and CatBoost on 24 of the 31 raw columns with training-median imputation, each averaged over two seeds. They see the data differently from our members, and adding them raises the nested OOF F2 by +0.0016 (95% CI [+0.0008, +0.0024], better in 5/5 folds, also better under test-like missingness).
 
 **Level 2:** a regularised logistic-regression stacker on the level-1 OOF log-odds. The stacker is itself cross-validated **on the same folds**, so its reported score is also out-of-fold. Its test input is the fold-averaged level-1 test predictions.
 
@@ -288,6 +288,21 @@ m1["XGBoost"] = cached("t1_xgb", lambda: run_cv("xgb", "binary", P1_xgb, X1, y1,
 m1["CatBoost"] = cached("t1_cat", lambda: run_cv("cat", "binary", P1_cat, X1, y1, X1_test, folds1, name="T1 cat"))
 m1["ExtraTrees"] = cached("t1_et", lambda: run_cv_sklearn(make_et1, "binary", X1.values, y1, X1_test.values, folds1, name="T1 et"))
 m1["LogReg"] = cached("t1_lr", lambda: run_cv_sklearn(make_lr1, "binary", X1.values, y1, X1_test.values, folds1, name="T1 logreg"))
+
+# Four more members built the way last year's 1st-place team built theirs (CPE342 1/2025, github.com/Saltywan/CPE342-KAGGLE):
+# 24 of the 31 raw columns, training-median imputation, near-default settings, each averaged over two seeds. Their different
+# inputs make them diverse: OOF F2 +0.0016 (95% CI [+0.0008, +0.0024], 5/5 folds), test-like +0.0023 (round 11, bn_/bo_ scripts).
+R1, R1_test = task1.build_c24(t1_train, t1_test)
+P24 = {"lgb": {"learning_rate": 0.05, "num_leaves": 31}, "xgb": {"learning_rate": 0.05, "max_depth": 6}, "cat": {"learning_rate": 0.08, "depth": 6}}
+SEEDS24 = (42, 7)
+seed_kw = lambda kind, s: {"random_seed": s} if kind == "cat" else {"random_state": s}
+make_rf24 = lambda s: (lambda: RandomForestClassifier(n_estimators=300, max_depth=10, max_features=0.7, n_jobs=-1, random_state=s))
+seed_avg = lambda rs: {k: np.mean([r[k] for r in rs], axis=0) for k in ("oof", "test")}
+m1["RF-24"] = cached("t1_rf24", lambda: seed_avg([run_cv_sklearn(make_rf24(s), "binary", R1.values, y1, R1_test.values, folds1,
+                                                                 name=f"T1 rf24 seed {s}") for s in SEEDS24]))
+for kind, nm in (("lgb", "LightGBM-24"), ("xgb", "XGBoost-24"), ("cat", "CatBoost-24")):
+    m1[nm] = cached(f"t1_{kind}24", lambda kind=kind: seed_avg([run_cv(kind, "binary", {**P24[kind], **seed_kw(kind, s)}, R1, y1, R1_test,
+                                                                      folds1, name=f"T1 {kind}24 seed {s}") for s in SEEDS24]))
 
 def stack_binary(models, y, folds, C_=1.0):
     S = np.column_stack([logit(m["oof"]) for m in models.values()])
@@ -695,6 +710,12 @@ f1["XGBoost"] = cached("t1_xgb_full", lambda: refit_full("xgb", "binary", P1_xgb
 f1["CatBoost"] = cached("t1_cat_full", lambda: refit_full("cat", "binary", P1_cat, X1, y1, X1_test, folds1, name="T1 cat"))
 f1["ExtraTrees"] = cached("t1_et_full", lambda: refit_full_sklearn(make_et1, "binary", X1.values, y1, X1_test.values))
 f1["LogReg"] = cached("t1_lr_full", lambda: refit_full_sklearn(make_lr1, "binary", X1.values, y1, X1_test.values))
+f1["RF-24"] = cached("t1_rf24_full", lambda: {"test": np.mean([refit_full_sklearn(make_rf24(s), "binary", R1.values, y1, R1_test.values)["test"]
+                                                               for s in SEEDS24], axis=0)})
+for kind, nm in (("lgb", "LightGBM-24"), ("xgb", "XGBoost-24"), ("cat", "CatBoost-24")):
+    f1[nm] = cached(f"t1_{kind}24_full", lambda kind=kind: {"test": np.mean([refit_full(kind, "binary", {**P24[kind], **seed_kw(kind, s)}, R1, y1,
+                                                                                         R1_test, folds1, name=f"T1 {kind}24 seed {s}")["test"]
+                                                                              for s in SEEDS24], axis=0)})
 St1 = np.column_stack([logit(blend_full(m1[k]["test"], f1[k]["test"])) for k in m1])
 stack1_test_final = STACKER1.predict_proba(St1)[:, 1]
 pred1_final = (stack1_test_final >= THR1).astype(int)
