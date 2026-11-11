@@ -459,3 +459,302 @@ Same folds, same 26-member v8 pool, paired Poisson bootstrap of the score differ
 - **Uploaded 2026-11-08: v9 scored 0.76242, the same as v8** (snapshot `versions/v9_LB0.76242`). So the merged pipeline reproduces
   v8's Task 3 quality on the hidden test rows.
 - Pre-merge notebooks and `submission.csv` are backed up in `versions/pre_t3_merge_backup_2026-11-08/`.
+
+### How can the top team be at 0.76297? (2026-11-08)
+The score fits two very different profiles (equal task weights):
+
+| Profile | T1 | T2 | T3 | T4 | T5 | Leaderboard |
+|---|---|---|---|---|---|---|
+| ours (v8/v9): player_id structure in T2/T5, Task 4 misaligned | 0.84 | 0.968 | 0.794 | ~0.21 | ~1.0 | 0.7624 |
+| clean tabular models + **working Task 4** + Isolation-Forest-level Task 5 | 0.84 | 0.755 | 0.79 | 0.95 | 0.48 | 0.763 |
+
+- Our player_id gains (+0.21 on T2, +0.52 on T5) are about the same size as a working Task 4 (+0.74), so the two totals coincide.
+- The TA baselines fit the second profile and cannot be reached with Task 4 at chance: default tabular models (T1 0.82, T2 0.75, T3 0.76) + a CNN at ~0.95 + Isolation Forest (0.46) give 0.748 (the challenge baseline is 0.75); simpler models + a weaker CNN (~0.7) give ~0.68 (the ground baseline).
+- Under the first profile the 0.00055 gap is about one SD of the leaderboard's own noise (public-row sampling plus Task 4 chance variation between teams).
+- Either way the leaders are not ahead on Tasks 1 or 3. The difference between teams sits in Task 4.
+- **Task 1 metric reading checked with our own uploads:** v3 → v4 (τ 0.163 → 0.190 plus the Task 5 union) changed the score by −0.00234. Positive-class F2 predicts −0.00265 (off by 0.0003, inside the noise); macro-F2 predicts −0.00023 (off by 0.0021). So the scorer uses positive-class F2, as we assumed.
+- **Sharper TA question #1:** Task 4's `test.csv` ids are random strings (`scyd5lz`, `slbh6z4`, ...) in unsorted order, while the image folder sorts as `s001rpz.jpg`, `s001six.jpg`, .... Nothing states whether ANS{i} is the i-th row of `test.csv` or the i-th image in sorted-filename order (or some other order).
+- **Sorted-filename order tested (v10, user request): 0.76257 vs v9 0.76242.** +0.00015 on the leaderboard = +0.00075 on Task 4, i.e. still
+  chance level (a correct order would give ~0.91). Two random alignments differ by about ±0.0009 on the leaderboard, so the +0.00015 is
+  noise. The answer key is in neither `test.csv` order nor sorted-filename order. The Task 4 zip on Drive is unchanged since 2026-10-05
+  (same size as our 2026-11-03 copy), so there is no newer data version. Only the TAs can resolve it.
+
+## Round 9 (2026-11-08): methods from the literature (`ay_t3_research.py`, `az_t1_research.py`, `ba_t1_ranker_check.py`)
+
+**Task 3 in context** (OOF): predict 0 for everyone 0.500 · segment median 0.620 · history × segment factor 0.722 · default
+random forest 0.760 · v3 pipeline 0.789 · **current pipeline 0.794** · our model + knowing who spends 0 (oracle) 0.852.
+
+### Task 3 (baseline B0 = merged pipeline pool, exact LP blend, 0.79423)
+| Experiment | Method (source) | OOF | Δ vs B0 | 95% CI | Decision |
+|---|---|---|---|---|---|
+| R1 | BG/NBD + Gamma-Gamma customer-base features (Fader, Hardie & Lee 2005) in a new hurdle | 0.79424 | +0.00001 | [−0.00001, +0.00004] | discard |
+| R2 | zero-inflated lognormal network, mixture-median read-out (Wang, Liu & Miao 2019) | 0.79423 | +0.00000 | [+0.00000, +0.00000] | discard |
+| R1+R2 | both | 0.79424 | +0.00001 | [−0.00001, +0.00004] | discard |
+| R3 | L1-optimal multiplier per prediction decile (nested) | 0.79410 | −0.00013 | [−0.00018, −0.00007] | discard |
+| R4 | ensemble selection with replacement (Caruana et al. 2004) instead of LP weights | 0.79429 | +0.00006 | [+0.00004, +0.00008] | significant but negligible (~+0.00001 LB); not merged |
+
+- **BG/NBD does not fit this data:** the maximum-likelihood fit degenerates (r, α → 0; a, b → very large), so P(alive) ≈ 1 for almost
+  everyone. Stage-1 AUC 0.7848 vs 0.7849, stage-2 MAE 0.1359 vs 0.1360. The synthetic recency/frequency columns do not behave like
+  a purchase process.
+- **ZILN network:** AUC 0.780 (GBDT stage 1: 0.785), log MAE on spenders 0.153 (GBDT ratio models: 0.136). Alone 0.7835 with the
+  median read-out, 0.7791 with the paper's mean read-out (the mean is the wrong target for an absolute-error metric). The LP blend
+  gives it zero weight.
+
+### Task 1 (baseline B0 = notebook stack, nested F2 0.8364)
+| Experiment | Method (source) | OOF AUC | OOF F2 | Δ | 95% CI | Decision |
+|---|---|---|---|---|---|---|
+| Q1 | focal-loss LightGBM γ = 1 as 6th member (Lin et al. 2017) | 0.8912 | 0.8369 | +0.0006 | [+0.0000, +0.0011] | borderline, not kept |
+| Q1′ | focal loss γ = 2 | 0.8915 | 0.8364 | +0.0001 | [−0.0005, +0.0006] | discard |
+| Q2 | pairwise-ranking XGBoost (rank:pairwise) as 6th member | 0.8912 | 0.8373 | +0.0009 | [+0.0002, +0.0015] | discard: test-weighted +0.0002, CI [−0.0009, +0.0012] |
+| Q3 | expected-F2 plug-in decision rule (Lipton et al. 2014; Nan et al. 2012) | 0.8910 | 0.8367 | +0.0003 | [−0.0002, +0.0008] | discard |
+
+- Q3's cut-off per fold is 0.167–0.168. On the test predictions it would cut at 0.170 (59.5% flagged vs 60.0% at 0.163), so the
+  decision rule we use is already where the theory puts it. Not applied (it would use test predictions to set the cut-off).
+- **Q2 check (`ba_t1_ranker_check.py`, stopped by Claude Code for low system memory after its main result):** seed 42 reproduces
+  +0.0009 (CI [+0.0003, +0.0015]), but reweighted to the test set's missing-value rates the gain is +0.0002, CI [−0.0009, +0.0012],
+  and on rows with all four key columns +0.0001. Like the imputation idea in round 8, the gain sits in rows missing key columns,
+  which the test set rarely has. Task 1 stays unchanged.
+- **Full check, re-run 2026-11-09:** seed 7 gives OOF +0.0004 (CI [−0.0002, +0.0010]), test-weighted +0.0002 (CI [−0.0008, +0.0012]);
+  seed 42 OOF +0.0009, test-weighted +0.0002 (CI [−0.0009, +0.0012]); both seeds averaged OOF +0.0009, test-weighted +0.0004
+  (CI [−0.0007, +0.0014]). The OOF gain depends on the seed and none of the test-weighted intervals is above 0: discard.
+- **Round 9 conclusion:** no pipeline change. Every literature method either adds nothing or helps only training rows that the
+  test set does not resemble.
+
+## Task 4 convention confirmed (2026-11-10, `bb_t4_alignment_check.py`)
+The convention was confirmed: Task 4 uses the datacard codes and ANS{i} = row i of `test.csv` (ANS00001 = first row). That is exactly
+what v1–v9 use (v10's sorted order is wrong). End-to-end check of our column:
+1. v9's task4 = argmax of the cached ensemble probabilities on 97.9% of rows (the rest are the class-wise multipliers); nothing is reordered when writing.
+2. A saved checkpoint re-run on `test.csv` rows by file name reproduces the cached probabilities (same class on 600/600 rows), so cache row i = `test.csv` row i.
+3. The same checkpoint scores 98.7% on held-out training images with the text labels mapped to the datacard codes.
+So our Task 4 file follows the stated convention exactly, yet the upload history (equal weights) still implies Task 4 ≈ 0.21. The cause
+is outside our file: the Task 4 answer key / scorer, or unequal task weights. Only the TAs can check (e.g. score v9's Task 4 column on its own).
+
+## Round 10 (2026-11-10): forensic audit + generalisation checks (`bc_audit_phase1.py`, `bd_phase2_t1t2.py`, `bf_phase2_t5.py`, `bg_phase2_t3.py`)
+Acceptance rule for this round: better on >= 4 of 5 folds, fold std not larger, paired-bootstrap 95% CI above 0, and (Task 1) not worse
+under the test's missing-value pattern.
+
+### Phase 1 audit
+| Check | Task 1 | Task 2 | Task 3 | Task 4 | Task 5 |
+|---|---|---|---|---|---|
+| train-vs-test AUC (all / missing indicators only / median-filled values) | 0.901 / 0.903 / 0.894 | 0.500 / 0.496 / 0.498 | 0.498 / 0.498 / 0.498 | – | test only |
+| largest value shift (KS on observed values) | 0.010 | 0.012 | 0.010 | brightness 115 → 105 | – |
+| informative missing columns (p < 0.001) | 0 of 31 | 0 of 44 | 0 of 32 | – | – |
+| impossible values | none (bounded scores clipped at their limits) | none (`account_age_days = 999` is not a sentinel) | none | 0 unreadable, all 230×120, 41 near-blank train frames | 207 accounts off-globe (139 teleports, 68 date-line wraps, already handled); `refund_count_2/3 = −1` in 16% = floor, not anomaly-related |
+| duplicates / constant / collinear | none / none / none | none / none / none | none / none / hist ~ prev (known identity) | no duplicate images | none / none / per-period lat, lon, skill series |
+
+- **Task 1's shift is only in which cells are missing** (test misses key columns far less often, a few others more often). Values do not
+  shift and missingness carries no label signal (MCAR). Under a test-like missing-value pattern the LightGBM member scores F2 0.847 vs 0.835
+  plain, so the test F2 should be above the OOF estimate.
+
+### Task 1 (B0 nested F2 0.8364, folds 0.8347 / 0.8369 / 0.8374 / 0.8343 / 0.8386, std 0.0016)
+| Exp | Change | F2 | Δ | 95% CI | folds better | fold std | test-like member Δ | Decision |
+|---|---|---|---|---|---|---|---|---|
+| A1 | missing-value indicators + native NaN | 0.8363 | +0.0002 | [−0.0003, +0.0008] | 4/5 | 0.0017 | −0.0001 | discard |
+| A2 | median imputation | 0.8362 | +0.0000 | [−0.0007, +0.0008] | 3/5 | 0.0020 | −0.0006 | discard |
+| A3 | masking-robust training (10% random cells masked, rows duplicated) | 0.8365 | +0.0003 | [−0.0003, +0.0011] | 3/5 | 0.0021 | +0.0009 | discard |
+| A4 | cut-off = median of per-fold optimal cut-offs | 0.8365 | +0.0001 | [−0.0002, +0.0005] | 3/5 | 0.0014 | – | discard |
+| A5 | isotonic calibration of members before stacking | 0.8363 | −0.0001 | [−0.0006, +0.0005] | 2/5 | 0.0009 | – | discard |
+| A6 | LightGBM averaged over 3 seeds | 0.8362 | +0.0001 | [−0.0006, +0.0007] | 3/5 | 0.0017 | −0.0005 | discard |
+
+Stacker calibration: Brier 0.1245, ECE 0.010 (already calibrated; the logistic stacker is a Platt-type calibrator).
+
+### Task 2, features only (B0 nested macro-F1 0.7536, folds 0.7535 / 0.7481 / 0.7544 / 0.7558 / 0.7562, std 0.0029)
+| Exp | Change | macro-F1 | Δ | 95% CI | folds better | fold std | Decision |
+|---|---|---|---|---|---|---|---|
+| B1 | class multipliers = median of per-fold optima | 0.7540 | +0.0004 | [−0.0003, +0.0013] | 3/5 | 0.0027 | discard |
+| B3 | LightGBM averaged over 3 seeds | 0.7534 | −0.0004 | [−0.0010, +0.0001] | 2/5 | 0.0023 | discard |
+
+Stacker calibration: log-loss 0.6058, multiclass Brier 0.3272.
+
+### Task 5: the brief's consensus ensemble vs the pipeline
+| Detector | flags | gap families caught | seed stability (Jaccard) | F3 vs id block (reference only) |
+|---|---|---|---|---|
+| pipeline: 6 gap families + dependence pocket | 2,191 | 100% | deterministic | **0.983** |
+| consensus (IF, ECOD, COPOD, MCD, AE), robust scaling, knee cut | 12,942 | 94% | 0.935 | 0.605 |
+| same, cut at the pipeline's count | 2,191 | 61% | 0.869 | 0.552 |
+| robust scaling + PCA 90% subspace, knee / same count | 12,939 / 2,191 | 72% / 48% | 0.905 / 0.833 | 0.457 / 0.420 |
+| quantile scaling, knee / same count | 12,935 / 2,191 | 90% / 39% | 0.921 / 0.704 | 0.572 / 0.358 |
+| quantile scaling + PCA, knee / same count | 12,944 / 2,191 | 88% / 37% | 0.934 / 0.810 | 0.566 / 0.345 |
+
+The knee of a fused score is degenerate on this data (it cuts at half of all accounts), and at any matched count the consensus misses
+most of the families. The pipeline stays.
+
+### Task 3 (B0 = merged pipeline 0.79423, folds 0.7876 / 0.7946 / 0.7977 / 0.8011 / 0.7903, std 0.00487)
+Already in place and not re-tested: L1 objectives (the median is the NMAE-optimal target), Tweedie as a mean member, folds stratified on
+zero / positive-quantile bins of the target, the zero gate at the median cross-over (round 8). Huber is not used because it targets
+something between the mean and the median.
+
+| Exp | Change | OOF | Δ | 95% CI | folds better | fold std | Decision |
+|---|---|---|---|---|---|---|---|
+| C2 | the 4 ratio stage-2 models with ~99% of the blend weight averaged over seeds 42 / 2026 / 777 | 0.79434 | +0.00011 | [−0.00001, +0.00023] | 4/5 | 0.00498 | discard (CI touches 0; ~+0.00002 LB) |
+| C3 | C2 + stage-1 P(y>0) averaged over the same seeds | 0.79435 | +0.00011 | [−0.00001, +0.00023] | 4/5 | 0.00497 | discard |
+
+Seed averaging lowers every member's stage-2 error a little (0.1357 → 0.1350 for CatBoost), so the effect is real but too small to
+clear the bar. It is the closest of all round-10 changes.
+
+### Multi-seed summary (brief step 3)
+3-seed averaging was tested for the main GBDT of every task: Task 1 +0.0001 (3/5 folds), Task 2 −0.0004 (2/5), Task 3 +0.00011 (4/5,
+CI touching 0). None clears the acceptance rule, so the single-seed models stay.
+
+### Deliverables
+`src/audit.py` + section 3.6 of the master notebook and a "Data-quality audit" cell in each task notebook. No model or decision changed.
+
+## Round 11 (2026-11-10): Task 4 on the test images, Task 1 tuning (`bh_t4_foundation_feats.py`, `bi_t4_probe_eval.py`, `bj_t1_tune.py`)
+
+### Task 4: how good are we on the TEST images? (label-free)
+The fine-tuned models are much less sure on test than out-of-fold: median max-probability 0.89 vs 0.91, and only 38–46% of test images
+above 0.9 vs 73–82% OOF. The fold models agree with each other on 90–92% of test images, ConvNeXt and DeiT on 90%.
+Three published estimators of accuracy without labels (they read our own predictions on the unlabeled test images, nothing is fitted):
+ATC (Garg et al. 2022), DoC (Guillory et al. 2021), agreement-on-the-line (AGL, Baek et al. 2022; 15 model pairs, probit fit r = 0.94).
+
+Frozen foundation features + logistic-regression probe (same 5 folds), to see whether web-scale features lose less under the shift:
+
+| Model | OOF acc | OOF macro-F1 | ATC | DoC | AGL | agrees with our ensemble on test | predicted test shares (7-11k / fiveN / freefried / pube / roblock) |
+|---|---|---|---|---|---|---|---|
+| ConvNeXt-T (fine-tuned) | 0.9886 | 0.9865 | 0.869 | 0.897 | 0.910 | 0.945 | 0.17 / 0.24 / 0.15 / 0.26 / 0.17 |
+| DeiT-III-S (fine-tuned) | 0.9862 | 0.9839 | 0.897 | 0.908 | 0.901 | 0.954 | 0.17 / 0.25 / 0.15 / 0.25 / 0.18 |
+| CLIP ViT-B/16, frozen | 0.8683 | 0.8526 | 0.737 | 0.782 | 0.696 | 0.675 | 0.25 / 0.20 / 0.16 / 0.27 / 0.14 |
+| DINOv2-B (reg4), frozen | 0.9153 | 0.9036 | 0.798 | 0.819 | 0.757 | 0.741 | 0.21 / 0.21 / 0.14 / 0.28 / 0.16 |
+| SigLIP-2 B/16, frozen | 0.8774 | 0.8631 | 0.764 | 0.802 | 0.707 | 0.712 | 0.23 / 0.19 / 0.15 / 0.26 / 0.17 |
+| all three concatenated | 0.9382 | 0.9297 | 0.815 | 0.858 | 0.793 | 0.779 | 0.21 / 0.21 / 0.14 / 0.27 / 0.17 |
+| (train label shares) | | | | | | | 0.39 / 0.14 / 0.18 / 0.19 / 0.10 |
+
+- Our fine-tuned ensemble is estimated at **~0.87–0.91 accuracy on test** (vs 0.99 OOF): a real domain shift, worth ~0.08–0.1 of
+  Task 4 *if* the answer key is fixed.
+- Frozen features are worse on test by every estimator (0.70–0.86), so they are not more robust here → **discarded**.
+- Every model, including the independent frozen ones, predicts only ~17–25% 7-11 Knights on test vs 39% in train: the test set very
+  likely has a different class mix (label shift), not a model that fails on 7-11 Knights.
+
+### Task 1: tuning every boosted-tree member (`bj_t1_tune.py`, studies in `outputs/optuna_round11.db`)
+Before: LightGBM tuned (40 trials, 2026-11-03); XGBoost and CatBoost on fixed settings. Optuna TPE, 30/30/25 trials on a 3-fold split,
+positive-class F2 at the best cut-off, trial 0 = current settings. Then each tuned member (learning rate halved, notebook rule) was swapped
+into the stack on the 5 pipeline folds against the same member refitted with its current settings (control stack F2 0.8366, folds
+0.8343 / 0.8375 / 0.8370 / 0.8350 / 0.8394, std 0.0018).
+
+| Member | tuning folds: current → best | member F2 (5 folds): current → tuned | stack F2 | Δ | 95% CI | folds better | fold std | test-like member Δ | Decision |
+|---|---|---|---|---|---|---|---|---|---|
+| XGBoost | 0.8354 → 0.8364 | 0.8340 → 0.8359 | 0.8371 | +0.0005 | [−0.0002, +0.0012] | 3/5 | 0.0017 | +0.0031 | discard (closest) |
+| CatBoost | 0.8351 → 0.8359 | 0.8358 → 0.8358 | 0.8364 | −0.0003 | [−0.0009, +0.0004] | 2/5 | 0.0019 | +0.0005 | discard |
+| LightGBM (re-tuned, positive-class F2) | 0.8360 → 0.8368 | 0.8347 → 0.8359 | 0.8367 | +0.0001 | [−0.0006, +0.0007] | 3/5 | 0.0017 | +0.0010 | discard |
+| all three tuned | | | 0.8367 | +0.0001 | [−0.0007, +0.0008] | 3/5 | 0.0018 | +0.0015 | discard |
+
+Tuning lifts single members by up to +0.002 F2, but the stack already averages their differences away: at most +0.0005 for the stack,
+inside the noise. The pipeline keeps its settings; tuned values are in `outputs/bj_t1_tuned_params.json`.
+
+### Last year's 1st-place repo (github.com/Saltywan/CPE342-KAGGLE, CPE342 1/2025; public; read on 2026-11-11)
+Same competition data (same Task 4 test images and ids). What they did, and what it tells us:
+
+| Task | Their method | Ours | Result on our folds |
+|---|---|---|---|
+| 1 | 24 of 31 raw columns, median imputation, RF / LGB / XGB / Cat (Optuna) + LightGBM meta-model, cut-off on macro F2 | 49 features, native NaN, 5 members + LR stacker, positive-class F2 | their recipe 0.8376 vs ours 0.8364; their members alone are strong (Cat 0.8370) → **adopted as extra members** (below) |
+| 2 | stack + **`player_id` features** (number, normalised, quartile bucket) | `player_id` blocks in v9 | they used the id too and still won both boards: useful for the TA question on `player_id` |
+| 3 | median imputation, LGB-MAE / XGB-squared / Cat-MAE + LightGBM-MAE meta | identity repair, ratio hurdle, L1 blend | their recipe **0.78276** vs ours **0.79423** → nothing to take |
+| 4 | ConvNeXt-V2-T, 224×224, no augmentation, class-weighted CE, trained on **56,318** labelled images (train + validation) | ConvNeXt-T + DeiT-III-S, 31,546 images | `test.csv` has `id = ANS00001…` + `file_name = scyd5lz.jpg…`: **ANS{i} = row i of test.csv, exactly our order** |
+| 5 | PyOD PCA, contamination 5% | 6 gap families + pocket | much weaker than ours (Isolation-Forest level) |
+
+- Their first five Task 4 test predictions (printed in the notebook) agree with ours on 3/5; the two disagreements are dark,
+  very noisy images where all 12 of our models agree with each other. A test-like re-weighting of our OOF (`bl_t4_testlike.py`:
+  train-vs-test classifier on DINOv2 / CLIP embeddings, AUC 0.82–0.84) gives **0.984 accuracy on test-like training images**
+  (0.981 in the most test-like decile; 0.982 in the darkest quintile), so the disagreements do not indicate a broken model.
+- Last year's teams had ~24.8k more labelled Task 4 images than we do. Whether this year has a validation set is a TA question.
+
+### Task 1: their ideas on our folds (`bk_lastyear_methods.py`, `bm_t1_rf_confirm.py`, `bn_t1_combined.py`, `bo_t1_seedavg.py`)
+| Variant | OOF F2 | Δ | 95% CI | folds better | test-like Δ | Decision |
+|---|---|---|---|---|---|---|
+| LightGBM meta-model instead of LR stacker | 0.8368 | +0.0005 | [−0.0002, +0.0012] | 4/5 | – | discard |
+| + RandomForest (median-imputed), vs cached members | 0.8374–0.8375 (3 seeds) | +0.0010…+0.0011 | all > 0 | 4–5/5 | +0.0012 | superseded: vs refitted members only +0.0001 (2-seed avg) |
+| their whole recipe (LGB meta) | 0.8376 | +0.0012 | [+0.0002, +0.0021] | 4/5 | – | reference |
+| **+ their 4 members (24 cols, median), 2-seed average** | **0.8383** | **+0.0016** | **[+0.0008, +0.0024]** | **5/5** | **+0.0023** [+0.0004, +0.0042] | **KEEP → merged** |
+| + RF + their 4 (2-seed avg) | 0.8381 | +0.0014 | [+0.0006, +0.0022] | 4/5 | +0.0022 | keep-level, not chosen (fewer folds) |
+| + their CatBoost only (2-seed avg) | 0.8379 | +0.0012 | [+0.0004, +0.0020] | 5/5 | +0.0020 | keep-level, smaller |
+
+(Baseline for the last four rows = all our members refitted, F2 0.8367.) Single seeds vary: + their 4 gave +0.0015 with seed 42
+and +0.0004 with seed 7, hence the 2-seed averaging in the pipeline. LightGBM ablation: our 49 features 0.8351, their 24 columns
+0.8355 (median) / 0.8363 (native NaN), all 31 raw columns 0.8344 / 0.8364: the gain comes from diversity, not from one better input.
+
+### v11 upload and a second look at last year's repo (2026-11-11)
+- **v11 = v9 + round-11 Task 1: public 0.76242, the same as v9.** The expected ~+0.0003 (Task 1 weight × the 387 changed labels
+  on the public share of the rows) is below what the public split can show. The +0.0016 nested OOF gain (5/5 folds) is the evidence;
+  v11 is the better final pick between the two. Snapshot: `versions/v11_LB0.76242/`.
+- **Same test set as last year.** Their Task 4 notebook predicts ~25.9k images (405 batches of 64) and their `test.csv` starts at
+  `scyd5lz.jpg`, like ours (25,889 rows). Their labelled set was 56,318 images, class counts {0: 15,865, 1: 8,601, 2: 12,277,
+  3: 8,838, 4: 10,737}; ours is 31,546 {12,429, 4,407, 5,596, 5,926, 3,188}. Every one of our counts is below theirs, consistent
+  with this year's train being a subset of last year's train + validation. Their held-out accuracy was 0.989 (8% split, epoch 10),
+  the same level as our OOF; nothing in their Task 4 recipe beats ours.
+- **Task 2:** their `player_id` features (number, normalised, z, quartile bucket) in a GBDT stack cannot beat the id block:
+  our id-block OOF 0.968 is the ceiling set by the 3% random label flips (block + features 0.9678). Nothing to take.
+- **Last year's leaderboard score is not in the repo.** Kaggle renders the leaderboard with JavaScript, so it could not be read
+  here. Because the test set is the same, last year's top public score would show how much of this year's gap to it is Task 4
+  scoring. Do **not** late-submit our predictions to last year's competition: it scores against the same hidden test labels,
+  which is test-set probing.
+
+### Task 5: is there a second leaking column? (`bp_t5_leak_scan.py`, `bp2_t5_leak_scan.py`, 2026-11-11)
+Prompted by a rumour of "one more leaking feature". Reference = the id block (2,070 accounts). Result: **no second leak.**
+- No column encodes the id: largest |Spearman(id, column)| outside the block 0.017 (noise ~0.012). NaN count per row and file
+  row position vs block: AUC 0.501 / 0.501. No duplicated rows, no non-integer value shared between rows, no constant
+  period-4/period-3 ratios, decimal digits as written in the csv differ by < 0.7 digits (friend_removes only, from the injection).
+- Best single-column AUC for the block is 0.63 (friend_adds_4).
+- **Values that occur only inside the block:** device_count_4 = 4 (156), guild_changes_1 = 3 (112), guild_changes_4 = 4 (97);
+  339 accounts, 0 outside. These are injected anomaly values (outside the normal range), i.e. real signal, and **all 339 are
+  already flagged** by the clean pipeline. Adding them changes nothing (F3 vs block 0.9827 → 0.9827).
+- Flag columns are weak: password_changed = 1 → 25% in block, mass_item_sale = 1 → 34%, vpn_usage = 1 → 12%.
+- v11's Task 5 is the id block itself (F3 1.0 if the block is the truth), so no second leak could raise v11.
+
+## Round 12 (2026-11-11): the "break the plateau" brief (`bq0_row_lag.py`, `bq_t1_paradigms.py`, `bq2_t1_followup.py`, `br_t2_maha.py`)
+Only the parts not tested in earlier rounds were run; same folds, nested cut-offs, test-like check and acceptance rule.
+**Nothing passes. No pipeline change, no new submission.**
+
+**Rules applied.** The denoising autoencoder is fitted on training-fold rows only (fitting it on test rows would be using the test
+set for a training-related purpose). TabPFN / TabICL are pre-trained models, which the rules allow for Task 4 only. AutoGluon and
+similar AutoML frameworks are prohibited. No test labels, pseudo-labels or leaderboard probing.
+
+**Past CPE342 repositories (Phase 1).** 12 repositories from the 1/2025 class besides Saltywan's (notebooks downloaded as data, never
+run). Best printed CV per task: T1 F2 0.8368 (tangIwza: LGB/XGB/Cat equal blend; ours 0.8383); T2 0.9685 with `player_id`
+(PasinS47: the same id blocks we found; ours 0.968), features only ≤ 0.754 (ours 0.7536); T3 normalised MAE 0.271 at best
+(PPANUT; ours ≈ 0.259, i.e. score 0.794); Liliable2's "NMAE 0.170" is computed on spenders only (zeros left out), not comparable;
+T4 held-out F1 0.935–0.992 (ours 0.988). No repo beats us on any task. Not used: `KwanchanokThungsuk/Player_Intelligence_System`
+(created 2026-11-05 with this year's data, so a current competitor); `chotanansub/karena-kaggle` holds only a README title and banners.
+
+**Methods research.** TabM (Gorishniy et al., ICLR 2025; parameter-efficient MLP ensemble) and RealMLP (Holzmüller et al., NeurIPS
+2024) are the strongest recent tabular nets and appear in recent Kaggle wins, usually blended with GBDTs via hill climbing or ridge
+stacking. Both papers report roughly GBDT-level accuracy, not a consistent margin.
+
+**Row order (Phase 2.1).** Neighbour-to-neighbour (lag-1) dependence in file order and in id order, Tasks 1–3 train/test and Task 5:
+no feature or target exceeds 4/√n in any file, except the known Task 2 id blocks (94% of id-neighbours share a segment vs 28% by
+chance). Cross-task links were ruled out in round 7.
+
+### Task 1 (baseline = current pipeline stack, 9 members, nested F2 0.8383)
+| Exp | Change | OOF F2 | Δ | 95% CI | folds better | test-like Δ | Decision |
+|---|---|---|---|---|---|---|---|
+| N1 | spline (quantile knots) + missing flags + scaled logistic regression member (alone 0.8081) | 0.8379 | −0.0004 | [−0.0009, +0.0001] | 2/5 | +0.0001 | discard |
+| N2 | LightGBM + in-fold class-conditional Mahalanobis distances (Ledoit-Wolf), seed 42 | 0.8385 | +0.0002 | [+0.0001, +0.0004] | 5/5 | +0.0002 | passed, but see seeds |
+| N2 | same, seed 7 / seed 2026 | 0.8384 / 0.8383 | +0.0001 / +0.0001 | include 0 | 4/5 / 3/5 | +0.0001 / −0.0001 | discard |
+| N2 | same, 3-seed average | 0.8383 | +0.0000 | [−0.0001, +0.0002] | 2/5 | +0.0002 | **discard** (seed 42 was luck) |
+| N3 | LightGBM + 128-d swap-noise DAE bottleneck (DAE fitted on training-fold rows) | 0.8382 | −0.0001 | [−0.0003, +0.0002] | 2/5 | +0.0001 | discard |
+| N4 | TabM-style MLP ensemble (k = 16, BCE; alone 0.8144) | 0.8383 | +0.0000 | [−0.0001, +0.0002] | 1/5 | −0.0000 | discard |
+| N5 | TabM with BCE + (1 − soft-F2) loss (alone 0.8130) | 0.8382 | −0.0001 | [−0.0003, +0.0002] | 1/5 | −0.0002 | discard |
+| S1 | rank averaging of the 9 members, no stacker | 0.8290 | −0.0093 | [−0.0105, −0.0080] | 0/5 | −0.0103 | discard |
+| S2 | Caruana hill climbing on F2 (nested; weights mostly Cat / their Cat / LGB) | 0.8370 | −0.0013 | [−0.0020, −0.0006] | 0/5 | −0.0010 | discard |
+
+The first S2 run fed logits to the 0.05–0.95 cut-off grid (0.7659); the fixed run maps back to probabilities. The logistic stacker
+stays the best combiner: it uses all nine members and is fitted, not searched.
+
+### Task 2, features only (no-`player_id` fallback; v11's Task 2 is the id block)
+| Exp | Change | macro-F1 | Δ | 95% CI | folds better | Decision |
+|---|---|---|---|---|---|---|
+| B0 | notebook stack + nested class multipliers | 0.7536 | – | – | – | baseline |
+| M1 | + LightGBM with 4 in-fold class Mahalanobis distances (alone 0.7542 vs plain 0.7536) | 0.7535 | −0.0001 | [−0.0007, +0.0007] | 3/5 | discard |
+| M2 | class multipliers shrunk 30% toward 1 | 0.7538 | +0.0002 | [−0.0003, +0.0007] | 3/5 | discard |
+
+### Brief items already tested in earlier rounds (not repeated)
+- Task 1: tabular MLP (round 3), in-fold kNN target features (round 4, E1), focal loss and pairwise ranking (round 9, Q1/Q2),
+  expected-F2 decision rule (Q3), isotonic calibration (round 10, A5), Optuna tuning (round 11). The metric is positive-class F2,
+  not macro (v3 → v4 upload pair, round 7).
+- Task 3: L1 / quantile (12 levels) / Tweedie members, median read-out, hurdle with exact zeros, L1-optimal decile multipliers
+  (R3), Caruana selection (R4: +0.00006, negligible), zero-inflated lognormal network (R2).
+- Task 4: class-wise multipliers are already in the pipeline; frozen CLIP / DINOv2 / SigLIP probes (round 11) were worse. More
+  backbones are not run: Task 4 scores at chance on the leaderboard until the TAs fix the key (README question #1), so a better
+  Task 4 model cannot move the score now.
+- Task 5: trajectory features (per-period shifts, jumps, burstiness, geo hops; round 2), multi-view ensemble (IF / ECOD / COPOD /
+  MCD / autoencoder, round 10: F3 0.35–0.61 vs pipeline 0.983), the F3 cut-off rule (flag when P(anomaly) > F3/10 ≈ 9%).
+  v11's Task 5 is the id block, so nothing can raise it.
