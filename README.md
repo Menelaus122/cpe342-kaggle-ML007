@@ -11,11 +11,11 @@ Our solution to the CPE342 (KMUTT, 1/2026) hackathon: **five machine-learning ta
 
 | # | Task | Type | Metric | Final recipe | OOF score |
 |---|------|------|--------|--------------|-----------|
-| 1 | Anti-cheat pre-filter | binary | $F_2$ (cheater) | LightGBM / XGBoost / CatBoost / ExtraTrees / LogReg → LogReg stacker → threshold τ = 0.163 (OOF optimum) | 0.8369 |
+| 1 | Anti-cheat pre-filter | binary | $F_2$ (cheater) | LightGBM / XGBoost / CatBoost / ExtraTrees / LogReg on 49 features + RF / LightGBM / XGBoost / CatBoost on 24 raw columns with median imputation (last year's 1st-place recipe, 2 seeds each) → LogReg stacker → threshold τ = 0.150 (OOF optimum) | 0.8383 |
 | 2 | Player segmentation | 4-class | $F_1$ (macro) | GBDTs + LogReg on latent engagement/spending indices → stacker → class-wise multipliers | 0.7549 |
 | 3 | 30-day spending | regression | NMAE score | repaired features (exact row identities, imputed segment) → L1 GBDTs, hurdles with a ratio-to-history stage 2 (LightGBM / XGBoost / CatBoost), Tweedie → out-of-fold L1 blend (exact LP) → median zero gate | 0.7942 |
 | 4 | Game title from screenshots | 5-class image | macro $F_1$ | ConvNeXt-Tiny + DeiT-III-S, 5-fold + full-data models, GPU augmentation, Mixup/CutMix, EMA, TTA | 0.9887 |
-| 5 | Account security | unsupervised | $F_3$ (anomaly) | 6 gap-separated anomaly families (1,811 accounts); score ensemble and rules as cross-checks | no labels* |
+| 5 | Account security | unsupervised | $F_3$ (anomaly) | 6 gap-separated anomaly families (1,811 accounts) + dependence-pocket detector (380 more; blind 2-D scan, permutation-null cut-off) = 2,191 flags; score ensemble and rules as cross-checks | no labels* |
 
 \*Task 5 has no labels. A second gap scan of the derived change features finds no account outside the six families.
 
@@ -33,7 +33,9 @@ Add a row for **every** upload (we have a daily limit), then snapshot it (see [V
 | 2026-11-06 | v7 | 0.76224 | v6 + Task 3 round 3 (ratio-to-history target, imputed segment; whale model dropped). Task 3 OOF 0.79331. Uses player_id like v5 |
 | 2026-11-06 | v8 | **0.76242** | v7 + Task 3 tuning (Optuna ratio stage 2, XGB/Cat ratio members). Task 3 OOF 0.79403. Uses player_id like v5 |
 | 2026-11-08 | v9 | **0.76242** | v8 with Task 3 from the merged pipeline (same recipe, retrained, exact LP blend; Task 3 OOF 0.79423). Same score as v8, as expected (+0.00004 predicted). Uses player_id like v5 |
-| — | current `submission.csv` | not uploaded | clean pipeline (no player_id): Tasks 1, 2, 4 = v3; **Task 3 = the v8 recipe, merged into the pipeline on 2026-11-08** (`task3.build_repaired`, ratio stage 2, exact L1 blend); Task 5 = families + dependence pocket (2,191 flags = 1,811 families + 380; blind 2-D scan + permutation-null cut-off, `src/task5.py`) |
+| 2026-11-08 | v10 | 0.76257 | v9 with Task 4 reordered to sorted image-filename order (user request). Task 4 still at chance (+0.00075 on Task 4, noise; a correct order would give ~0.91), so the key is in neither order. Not a real improvement. Uses player_id like v5 |
+| 2026-11-11 | v11 | **0.76242** | v9 with **Task 1 from round 11** (`submission_v11_try.csv`): 4 extra stack members built like last year's 1st-place team's (24 raw columns, median imputation; github.com/Saltywan/CPE342-KAGGLE). Nested OOF F2 0.8367 → 0.8383 (+0.0016, 95% CI [+0.0008, +0.0024], 5/5 folds, test-like +0.0023); 387 Task 1 labels differ from v9. Same public score as v9: the expected ~+0.0003 is below the public split's noise. Tasks 2–5 identical to v9. Uses player_id like v5 |
+| — | current `submission.csv` (= `submission_clean_try.csv`) | not uploaded | clean pipeline (no player_id): Task 1 = round 11 (above); Tasks 2, 4 = v3; **Task 3 = the v8 recipe, merged into the pipeline on 2026-11-08** (`task3.build_repaired`, ratio stage 2, exact L1 blend); Task 5 = families + dependence pocket (2,191 flags = 1,811 families + 380; blind 2-D scan + permutation-null cut-off, `src/task5.py`) |
 
 **Open questions for the TAs** (papit.vieng@kmutt.ac.th, phanita.siri@kmutt.ac.th):
 1. Task 4 label format (integer codes as in the datacard, or text such as `fiveN` as on the slide) and whether row *i* of Task 4's `test.csv` maps to `ANS{i}`.
@@ -163,6 +165,9 @@ If git reports a conflict in an `.ipynb`, don't merge it by hand: accept either 
 | `versions/v7_LB0.76224/` | 0.76224 | submission file + scripts (Task 3 round 3 on the v5 file) |
 | `versions/v8_LB0.76242/` | 0.76242 | submission file + scripts (Task 3 tuning on the v7 file) |
 | `versions/v9_LB0.76242/` | 0.76242 | uploaded file + the full pipeline state that produced its Task 3 column (code, notebooks, cached predictions, params); also the clean pipeline output |
+| `versions/v10_LB0.76257/` | 0.76257 | submission file + reorder script (Task 4 sorted-filename order test) |
+| `versions/v11_LB0.76242/` | 0.76242 | uploaded file (v9 + round-11 Task 1) + the full pipeline state that produced its Task 1 column (code, notebooks, cached predictions, params); also the clean pipeline output |
+| `versions/pre_round11_backup_2026-11-11/` | not uploaded | master and task notebooks, `nb_part2.py`, `task1.py`, submission parts and `submission.csv` just before the round-11 Task 1 members were merged |
 | `versions/pre_t3_merge_backup_2026-11-08/` | not uploaded | notebooks, submission parts and `submission.csv` just before Task 3 v8 was merged into the pipeline |
 
 
