@@ -425,9 +425,10 @@ The level-1 pool mixes *median* estimators (the right target for absolute error)
   * **Expected value with Duan smearing,** $p\,(e^{\mu}\bar{e^{\varepsilon}}-1)$. This is the MSE-optimal recipe, shown for contrast.
 * **Tweedie GBDT** ($p=1.5$, log link): a mean estimator.
 
-These are blended with **non-negative weights that minimise total absolute error**, with the weights fitted out-of-fold. Non-negative L1 blending is a linear program ($\min \sum(u+v)$ s.t. $Pw+u-v=y$, $w,u,v\ge 0$), so the weights are solved exactly with HiGHS instead of a local search (deterministic, and +0.00007 NMAE out-of-fold over the earlier Powell search). Two light post-processing steps follow:
+These are blended with **non-negative weights that minimise total absolute error**, with the weights fitted out-of-fold. Non-negative L1 blending is a linear program ($\min \sum(u+v)$ s.t. $Pw+u-v=y$, $w,u,v\ge 0$), so the weights are solved exactly with HiGHS instead of a local search (deterministic, and +0.00007 NMAE out-of-fold over the earlier Powell search). Three light post-processing steps follow:
 * a **median-consistent zero gate:** wherever the hurdle classifier gives $P(y>0)\le 0.5$, the conditional median is exactly 0, so the prediction is set to 0;
-* a single scale factor.
+* a single scale factor;
+* a **cap at the largest training value** (300,000 THB, reached by 15 training rows, so the target looks truncated there). A prediction above any value the target can take only adds error. Out-of-fold, each fold's cap comes from its own training rows (+0.00011 NMAE, 95% CI [+0.00003, +0.00021], 4/5 folds; it touches very few rows).
 """)
 code(r"""
 S1_3 = tuned("task3_stage1", {"learning_rate": 0.05})          # hurdle stage 1, Optuna-tuned for log-loss
@@ -479,27 +480,30 @@ P3o = np.column_stack([m3[k][0] for k in names3])
 P3t = np.column_stack([m3[k][1] for k in names3])
 
 # out-of-fold blending: weights fitted on 4 folds' OOF predictions, applied to the 5th
-blend_oof = np.zeros(len(y3))
+blend_oof, cap_oof = np.zeros(len(y3)), np.zeros(len(y3))
 for tr, va in folds3:
     w = task3.l1_blend_weights_exact(y3[tr], [P3o[tr, j] for j in range(P3o.shape[1])])
     blend_oof[va] = P3o[va] @ w
-W3 = task3.l1_blend_weights_exact(y3, [P3o[:, j] for j in range(P3o.shape[1])])
+    cap_oof[va] = y3[tr].max()
+W3 =task3.l1_blend_weights_exact(y3, [P3o[:, j] for j in range(P3o.shape[1])])
 # median-consistent zero gate: if P(y>0) <= 0.5 the conditional median is exactly 0
 gate_oof = (np.clip(h["p_oof"] + RO3["Hurdle"]["shift"], 0, 1) > 0.5).astype(float)
 gate_test = (np.clip(h["p_test"] + RO3["Hurdle"]["shift"], 0, 1) > 0.5).astype(float)
 scales = np.linspace(0.85, 1.15, 61)
 sc_scores = [nmae(y3, blend_oof * s * gate_oof) for s in scales]
 SCALE3 = float(scales[int(np.argmax(sc_scores))])
-SCORE3 = nmae(y3, blend_oof * SCALE3 * gate_oof)
-pred3 = np.clip(P3t @ W3 * SCALE3, 0, None) * gate_test
+CAP3 = float(y3.max())                                           # the target never exceeds its training maximum
+SCORE3 = nmae(y3, np.minimum(blend_oof * SCALE3 * gate_oof, cap_oof))
+pred3 = np.minimum(np.clip(P3t @ W3 * SCALE3, 0, None) * gate_test, CAP3)
 
 rows = [[k, nmae(y3, m3[k][0])] for k in names3]
 rows += [["L1 blend (out-of-fold weights)", nmae(y3, blend_oof)],
          ["+ zero gate (P(y>0) <= 0.5 -> 0)", nmae(y3, blend_oof * gate_oof)],
-         [f"+ scale {SCALE3:.3f} (final)", SCORE3]]
+         [f"+ scale {SCALE3:.3f}", nmae(y3, blend_oof * SCALE3 * gate_oof)],
+         [f"+ cap at the training maximum, {CAP3:,.0f} THB (final)", SCORE3]]
 display(pd.DataFrame(rows, columns=["model", "NMAE"]).set_index("model").style.format("{:.5f}").highlight_max(props="font-weight:bold"))
 print("full-data blend weights:", {k: round(float(w), 3) for k, w in zip(names3, W3) if w > 1e-3})
-summary.append(["Task 3", "NMAE", SCORE3, "repaired features; L1/hurdle/ratio-hurdle/Tweedie pool -> OOF L1 blend -> median zero gate -> scale"])
+summary.append(["Task 3", "NMAE", SCORE3, "repaired features; L1/hurdle/ratio-hurdle/Tweedie pool -> OOF L1 blend -> median zero gate -> scale -> cap"])
 
 fig, axes = plt.subplots(1, 2, figsize=(11.5, 3.5))
 hb = axes[0].hexbin(np.log1p(y3), np.log1p(blend_oof * SCALE3), gridsize=60, cmap=SEQ_CMAP, bins="log", mincnt=1)
@@ -757,7 +761,7 @@ for k in names3:
     else:
         P3t_final.append(blend_full(m3[k][1], full3[k]))
 gate_test_final = (np.clip(p_fin + RO3["Hurdle"]["shift"], 0, 1) > 0.5).astype(float)
-pred3_final = np.clip(np.column_stack(P3t_final) @ W3 * SCALE3, 0, None) * gate_test_final
+pred3_final = np.minimum(np.clip(np.column_stack(P3t_final) @ W3 * SCALE3, 0, None) * gate_test_final, CAP3)
 changes.append(["Task 3", "corr(log1p before, after)", np.corrcoef(np.log1p(pred3), np.log1p(pred3_final))[0, 1],
                 f"zero share {np.mean(pred3 == 0):.3f} -> {np.mean(pred3_final == 0):.3f}"])
 

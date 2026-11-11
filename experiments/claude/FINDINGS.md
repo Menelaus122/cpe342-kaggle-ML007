@@ -758,3 +758,42 @@ stays the best combiner: it uses all nine members and is fitted, not searched.
 - Task 5: trajectory features (per-period shifts, jumps, burstiness, geo hops; round 2), multi-view ensemble (IF / ECOD / COPOD /
   MCD / autoencoder, round 10: F3 0.35–0.61 vs pipeline 0.983), the F3 cut-off rule (flag when P(anomaly) > F3/10 ≈ 9%).
   v11's Task 5 is the id block, so nothing can raise it.
+
+## Round 13 (2026-11-11): cross-task links, calibration, Task 4 labels (`bs_cross_task.py`, `bt_t5_cutoff.py`, `bu_t4_labels.py`, `bv_t3_scale_whale.py`, `bv2_t3_followup.py`)
+
+**Rules kept:** auxiliary models use training rows only, test rows are only predicted, and no upload variants were made. The brief asked for two Task 5 variants "to isolate Task 5's impact on the leaderboard"; that is the probing the rules forbid, and the numbers below say both would score lower anyway. `sample_submission.csv`: only column names and types were read.
+
+**1. Cross-task links: none.**
+- Exact entity match on all matching columns (4-10 columns, T1/T2/T3 in every train/test combination): 0 rows, equal to the shuffled baseline. Pairs with Task 5 share one column only and match at exactly the chance count.
+- 82 pairings of matching columns by ANS position or by `player_id`, train and test: largest |Spearman| 0.0368 (n = 4,682, about 2.5 standard errors, the size expected from 82 tries). Task 2 segment = Task 3 segment on 28.0% of rows.
+- v11 by ANS id: mean predicted Task 3 spending by Task 2 class is 10,380 / 10,353 / 10,583 / 10,722 (a linked Whale would be many times higher). Every chi-square p > 0.19, Cramer's V <= 0.0153. The clean file agrees.
+- Transfer (rank-mapped shared columns, fitted on the other task's training rows): Task 3 member +0.00014 (4/5) but weight 0.0 in the blend in all 5 folds, so +0.00000; Task 2 member +0.0000 (3/5); Task 1 member F2 -0.0003 (3/5). All discard.
+
+**2. Task 5 cut-off: v11 is already at the top.**
+- v11 flags 2,070 = 7.996%, identical to the id block. The score of each upload implies Task 5 = 0.99-1.01 given Task 4 = 0.20-0.22.
+- Consensus score alone: best F3 against the block is 0.664 at the top 18%. Knee at 5.90%; the score falls from 124 to 3.3 between the top 3% and 4%.
+- Adding consensus flags to v11 lowers F3 against the block: top 10% 0.943, top 20% 0.852, top 35% 0.740.
+- If the true rate were 12%, v11 would score about 0.69 and the leaderboard total would be about 0.70, not 0.762. That scenario is excluded by the uploads we already have.
+
+**3. Task 4: the label-order hypothesis cannot explain the score.**
+- Datacard, slides 20-21 and our code all use the alphabetical order. Simulating the order quoted in the brief on OOF gives macro-F1 0.0028, not 0.21 (no class stays in place).
+- Permutations by fixed points: 0 -> 0.003, 1 -> 0.200, 2 -> 0.397, 3 -> 0.594, 5 -> 0.988. A shuffled row order gives 0.200 +- 0.002. So 0.21 fits a shuffled key or a code permutation with exactly one class in place (45 of 120), and only the TAs can tell which.
+- Slide 24 shows Task 4 as text; text uploads scored Task 4 = 0, integers about 0.21, floats about 0.03. Worth stating in TA question #1.
+- Model: 2-backbone OOF macro-F1 0.9881, accuracy 0.9899, weakest class 0.9802, h-flip TTA already in. Above the brief's 0.95 bar, so no upgrade was trained.
+
+**4. Task 3: the exact L1 blend already solves the scale.** Baseline B0 = pipeline, 0.79423, scale 1.000.
+
+| Variant | NMAE | delta | 95% CI | folds | Decision |
+|---|---|---|---|---|---|
+| A1 nested scale alpha 0.90-1.15 | 0.79423 | 0 | 0 | 0/5 | discard (alpha = 1.000 in every fold) |
+| A2 nested alpha + zero cut-off tau | 0.79423 | 0 | 0 | 0/5 | discard (tau = 0 in every fold) |
+| A3 sum-matching alpha | 0.79423 | -0.00000 | [-0.00006, +0.00005] | 2/5 | discard |
+| W1 raw-scale Huber member | 0.79423 | 0 | 0 | 0/5 | discard (weight 0.0 in all 5 folds; member alone 0.78206) |
+| W2 top-spender raw L1 model | 0.79423 | 0 | 0 | 0/5 | discard (nested weight 0 in every fold) |
+| E1 Task 2 segment member in the blend | 0.79423 | 0 | 0 | 0/5 | discard (weight 0.0) |
+| **C1 cap predictions at the training maximum** | **0.79434** | **+0.00011** | **[+0.00003, +0.00021]** | **4/5** | **passes; 7 OOF rows** |
+
+- sum(pred)/sum(y) = 1.0052: no undershoot. Whales are not under-predicted: on the top 1% by prediction, sum(y)/sum(pred) = 0.974 and median y/pred = 1.006; about 50% of y lies above the prediction in every decile. The "0.707" on the top 1% by actual y is selection on the outcome.
+- Top 1% of absolute errors = 39.5% of total error, of which 47.7% is actual zeros (a whale who skips a month), the part already known to be unpredictable.
+- C1 on the test file: the target is capped at 300,000 (15 training rows sit exactly there). One v11 test prediction is above it (431,946). If that row's true value is at most 300,000, its error falls by exactly 131,946 THB whatever the true value is: about +0.0003 NMAE, about +0.00006 on the leaderboard if the row is scored. This is below the public-board noise (SD about 0.0004), so an upload could not confirm it.
+- **C1 merged into the pipeline** (`scripts/nb_part2.py`, section 7.4): out-of-fold cap = each fold's training maximum, test cap = `y3.max()`, applied after the scale and the zero gate. All six notebooks re-executed with no errors; Task 3 OOF reads 0.79434. Compared with the pre-cap outputs exactly one Task 3 row changed (ANS14698, 431,946.09 → 300,000) and Tasks 1, 2, 4, 5 are identical. `submission_v12_try.csv` = `submission_v11_try.csv` with only that value capped (one line differs from v11, sha256 `de380b025cdfe095154ffdfe5ef8d57fd7ed0e48160b90d3ceb94241ca29c384`). Clean pipeline `submission.csv` = `submission_clean_try.csv`, sha256 `061cb9866cab7de5d203799a890834c6a4186790e38ec107bf90bd9f33620b28`.
