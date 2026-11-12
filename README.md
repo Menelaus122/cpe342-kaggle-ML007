@@ -12,10 +12,10 @@ Our solution to the CPE342 (KMUTT, 1/2026) hackathon: **five machine-learning ta
 | # | Task | Type | Metric | Final recipe | OOF score |
 |---|------|------|--------|--------------|-----------|
 | 1 | Anti-cheat pre-filter | binary | $F_2$ (cheater) | LightGBM / XGBoost / CatBoost / ExtraTrees / LogReg on 49 features + RF / LightGBM / XGBoost / CatBoost on 24 raw columns with median imputation (last year's 1st-place recipe, 2 seeds each) → LogReg stacker → threshold τ = 0.150 (OOF optimum) | 0.8383 |
-| 2 | Player segmentation | 4-class | $F_1$ (macro) | GBDTs + LogReg on latent engagement/spending indices → stacker → class-wise multipliers | 0.7549 |
+| 2 | Player segmentation | 4-class | $F_1$ (macro) | GBDTs + LogReg on latent engagement/spending indices → stacker → class-wise multipliers | 0.7568 |
 | 3 | 30-day spending | regression | NMAE score | repaired features (exact row identities, imputed segment) → L1 GBDTs, hurdles with a ratio-to-history stage 2 (LightGBM / XGBoost / CatBoost), Tweedie; hurdle and the main ratio stages bagged over 10 seeds → out-of-fold L1 blend (exact LP) → median zero gate → cap at the training maximum | 0.7946 |
 | 4 | Game title from screenshots | 5-class image | macro $F_1$ | ConvNeXt-Tiny + DeiT-III-S, 5-fold + full-data models, GPU augmentation, Mixup/CutMix, EMA, TTA | 0.9887 |
-| 5 | Account security | unsupervised | $F_3$ (anomaly) | 6 gap-separated anomaly families (1,811 accounts) + dependence-pocket detector (380 more; blind 2-D scan, permutation-null cut-off) = 2,191 flags; score ensemble and rules as cross-checks | no labels* |
+| 5 | Account security | unsupervised | $F_3$ (anomaly) | 6 gap-separated anomaly families (1,809 accounts) + dependence-pocket detector (339 more; blind 2-D scan, permutation-null cut-off) = 2,148 flags; score ensemble and rules as cross-checks | no labels* |
 
 \*Task 5 has no labels. A second gap scan of the derived change features finds no account outside the six families.
 
@@ -37,15 +37,18 @@ Add a row for **every** upload (we have a daily limit), then snapshot it (see [V
 | 2026-11-11 | v11 | **0.76242** | v9 with **Task 1 from round 11** (`submission_v11_try.csv`): 4 extra stack members built like last year's 1st-place team's (24 raw columns, median imputation; github.com/Saltywan/CPE342-KAGGLE). Nested OOF F2 0.8367 → 0.8383 (+0.0016, 95% CI [+0.0008, +0.0024], 5/5 folds, test-like +0.0023); 387 Task 1 labels differ from v9. Same public score as v9: the expected ~+0.0003 is below the public split's noise. Tasks 2–5 identical to v9. Uses player_id like v5 |
 | 2026-11-11 | v12 | **0.76248** | v11 with **Task 3 predictions capped at the training maximum of 300,000** (`submission_v12_try.csv`): one test row changes (ANS14698, 431,946 → 300,000). Task 3 OOF 0.79423 → 0.79434 (+0.00011, 95% CI [+0.00003, +0.00021], 4/5 folds). Public score +0.00006, the size predicted if that row is in the public split. Tasks 1, 2, 4, 5 identical to v11. Uses player_id like v5 |
 | — | `submission_v13.csv` | not uploaded | v12 with **Task 3 from the 10-seed bag** (round 14, merged into the pipeline): both hurdle stages and the four ratio stage-2 models that carry the blend weight averaged over 10 model seeds; read-outs, blend weights, gate and scale re-learned out-of-fold. Task 3 OOF 0.79434 → 0.79458 (+0.00024, 95% CI [+0.00011, +0.00037], 5/5 folds). 12,945 Task 3 values change (median 16.5 THB); Tasks 1, 2, 4, 5 identical to v12. Expected public change about +0.00005, below the noise. Uses player_id like v5 |
-| — | current `submission.csv` (= `submission_clean_v13.csv`; before round 14 `submission_clean_try.csv`) | not uploaded | clean pipeline (no player_id): Task 1 = round 11 (above); Tasks 2, 4 = v3; **Task 3 = the v8 recipe, merged into the pipeline on 2026-11-08** (`task3.build_repaired`, ratio stage 2, exact L1 blend), capped at the training maximum of 300,000 since round 13, hurdle and main ratio stages bagged over 10 seeds since round 14 (OOF 0.79423 → 0.79434 → 0.79458); Task 5 = families + dependence pocket (2,191 flags = 1,811 families + 380; blind 2-D scan + permutation-null cut-off, `src/task5.py`) |
+| — | `submission_clean_v13.csv` (before round 14 `submission_clean_try.csv`) | not uploaded | clean pipeline (no player_id): Task 1 = round 11 (above); Tasks 2, 4 = v3; **Task 3 = the v8 recipe, merged into the pipeline on 2026-11-08** (`task3.build_repaired`, ratio stage 2, exact L1 blend), capped at the training maximum of 300,000 since round 13, hurdle and main ratio stages bagged over 10 seeds since round 14 (OOF 0.79423 → 0.79434 → 0.79458); Task 5 = families + dependence pocket (2,191 flags = 1,811 families + 380; blind 2-D scan + permutation-null cut-off, `src/task5.py`) |
+| — | **`submission_v14.csv`** (= current `submission.csv`) | not uploaded | **first file for the TAs' data re-release of 2026-11-12** (round 17). Task 4: the same predictions in the new `test.csv` row order (the old files agree with it on only 21% of rows, which matches the ~0.21 Task 4 score of every earlier upload); Task 2: retrained on the new data, OOF macro-F1 0.7568, no player_id (the id pattern is gone); Task 5: families + pocket rerun on the new test set (2,148 flags = 1,809 + 339); Tasks 1 and 3: data unchanged, identical to v13's pipeline columns |
+
+**Every file up to v13 (and both clean files) belongs to the first data release:** its Task 4 column is in the old row order, and its Task 2 / Task 5 columns are for test rows that no longer exist. Do not upload them.
 
 **Open questions for the TAs** (papit.vieng@kmutt.ac.th, phanita.siri@kmutt.ac.th):
-1. Task 4 label format (integer codes as in the datacard, or text such as `fiveN` as on the slide) and whether row *i* of Task 4's `test.csv` maps to `ANS{i}`.
+1. ~~Task 4 label format and whether row *i* of Task 4's `test.csv` maps to `ANS{i}`.~~ Answered by the 2026-11-12 re-release: `test.csv` now has `id = ANS{i}` and `file_name`, labels are the datacard's integer codes.
 2. $F_2$ / $F_3$: positive class (slide formula) or macro?
 3. Task weights in the leaderboard average.
 4. Task 1's `train.csv` has 13,184 rows without a label. May they be used (semi-supervised), or should they be ignored as now?
 5. Task 5: which behaviours count as anomalous (e.g. do persistently near-inactive or silent accounts count)?
-6. `player_id` is not random. In Task 2 the segments sit in four id blocks (97% pure; using the id would raise OOF macro-F1 from 0.755 to 0.968). In Task 5 all anomalies sit in the top 8% of ids. May we use `player_id` as a feature? (Details: `experiments/claude/FINDINGS.md`.)
+6. ~~`player_id` is not random. In Task 2 the segments sit in four id blocks (97% pure; using the id would raise OOF macro-F1 from 0.755 to 0.968). In Task 5 all anomalies sit in the top 8% of ids. May we use `player_id` as a feature? (Details: `experiments/claude/FINDINGS.md`.)~~ Moot since the 2026-11-12 re-release: the new Task 2 and Task 5 data have no id pattern.
 
 `outputs/format_variants/` already holds the current predictions in the other conventions, ready for whatever they answer.
 
@@ -65,9 +68,12 @@ python -m ipykernel install --sys-prefix --name cpe342        # the notebooks us
 ```
 
 ### 2. Data
-* **Tasks 1, 2, 3, 5:** the CSVs are in the repo (`01_…`, `02_…`, `03_…`, `05_…`).
+The TAs re-released the data on **12 Nov 2026**; the repo holds the new release. Tasks 1 and 3 did not change. Tasks 2 and 5 are new datasets (the old `player_id` patterns are gone). Task 4's `test.csv` now has columns `id, file_name, label`, and lists the same test images as before in a **different row order** (row *i* = `ANS{i}`). The images themselves did not change.
+* **Tasks 1, 2, 3, 5:** the CSVs are in the repo (`01_…`, `02_…`, `03_…`, `05_…`), identical to the Kaggle download (`player-intelligence-system-cpe-342-ml`).
+* **Task 4 CSVs:** in the repo at `04_image_classification/_download/task4_image_classification/{train,test}.csv`.
 * **Task 4 images (1.3 GB, not in git):** download from the Drive link in `04_image_classification/README.md` and extract so that the layout is
   `04_image_classification/_download/task4_image_classification/{train,test,train.csv,test.csv}`.
+* Task 4 caches made under the first release were moved into the new test order by `scripts/reorder_task4_test_cache.py`. Each cache stores `test_file_name`, and the notebook checks it against `test.csv`.
 * **Task 4 checkpoints (not in git):** only needed for the Grad-CAM cell. Download them from the GitHub release:
   ```bash
   gh release download t4-checkpoints -D outputs/models

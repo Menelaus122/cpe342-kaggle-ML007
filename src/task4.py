@@ -30,11 +30,23 @@ NATIVE_HW = (120, 230)
 
 
 def load_frames():
+    """Train/test frames with `label` (datacard code), `class` (text) and `path`.
+
+    Release of 2026-11-12 (current): columns id (PLY00001.. / ANS00001..), file_name, label (int code); row i of test.csv is
+    ANS{i}. The first release (2026-11-03, kept in _release_2026-11-03/) had id = file stem and class = text, and its test
+    rows were in a different order. The images are byte-identical in both releases.
+    """
     train = pd.read_csv(DATA / "train.csv")
     test = pd.read_csv(DATA / "test.csv")
-    train["label"] = train["class"].map(CLASS_TO_IDX).astype(int)
-    train["path"] = [str(DATA / "train" / f"{i}.jpg") for i in train.id]
-    test["path"] = [str(DATA / "test" / f"{i}.jpg") for i in test.id]
+    if "file_name" in train.columns:
+        train["label"] = train["label"].astype(int)
+        train["class"] = [T4_CLASSES[k] for k in train.label]
+    else:
+        train["label"] = train["class"].map(CLASS_TO_IDX).astype(int)
+        train["file_name"] = train.id.astype(str) + ".jpg"
+        test["file_name"] = test.id.astype(str) + ".jpg"
+    train["path"] = [str(DATA / "train" / f) for f in train.file_name]
+    test["path"] = [str(DATA / "test" / f) for f in test.file_name]
     return train, test
 
 

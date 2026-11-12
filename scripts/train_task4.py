@@ -64,7 +64,7 @@ def main():
                                        bs=args.bs, lr=args.lr, seed=SEED + 100, log=log,
                                        ckpt_path=MODEL_DIR / f"t4_{args.tag}_full.pt", aug_kw=aug_kw)
         tp = task4.predict_paths(model, test.path.values, size, tta=True)
-        np.savez_compressed(out_path, test_probs=tp)
+        np.savez_compressed(out_path, test_probs=tp, test_file_name=np.array(test.file_name.tolist(), dtype="U"))
         (log_dir / f"t4_{args.tag}_full_history.json").write_text(json.dumps(hist, indent=1))
         log("full refit: done")
         return
@@ -80,7 +80,8 @@ def main():
                                        ckpt_path=MODEL_DIR / f"t4_{args.tag}_fold{f}.pt", aug_kw=aug_kw)
         vp = task4.predict_array(model, arr[va], size, tta=True)
         tp = task4.predict_paths(model, test.path.values, size, tta=True)
-        np.savez_compressed(out_path, val_idx=va, val_probs=vp, test_probs=tp)
+        np.savez_compressed(out_path, val_idx=va, val_probs=vp, test_probs=tp,
+                            test_file_name=np.array(test.file_name.tolist(), dtype="U"))
         (log_dir / f"t4_{args.tag}_fold{f}_history.json").write_text(json.dumps(hist, indent=1))
         log(f"fold {f}: TTA macro-F1 {f1_score(y[va], vp.argmax(1), average='macro'):.4f}")
         del model

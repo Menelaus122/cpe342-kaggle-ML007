@@ -848,3 +848,77 @@ Summary of step 4: only Task 3 passes. Tasks 1 and 2 stay as in v12 and in the c
 - `submission_v13.csv` sha256 `538d250be0078afed41090a0290148e78a83a62465cfeb9271468c729d40c76a`; `submission_clean_v13.csv` (clean fallback + the same Task 3) sha256 `7239937c8c925deba9b1a50f84facceef4f498e992662b1e09f493620b9728e6`.
 - Expected leaderboard effect at equal weights: +0.00005, below the public-board noise. The decision rests on the out-of-fold evidence, not on the public score.
 - **Merged into the pipeline** (`scripts/nb_part2.py`, sections 7.3 and 7.6; user-approved): `SEEDS3`, per-seed caches `t3r_*_s<seed>` copied from the bag run by `cb_r14_cache_t3_bag.py` (seed-42 files equal the existing cache; the notebook lambdas recompute any missing seed with the same parameters). All six notebooks re-executed, 0 error outputs; the Task 3 cell reads 0.79458 with the weights above. The pipeline `submission.csv` matched `ca_r14_build_v13.py` except 69 Task 3 values that differ by exactly 0.01 THB (seed averaging in a different floating-point order), so the final files take Task 3 from the pipeline (`cc_r14_v13_from_pipeline.py`): `submission_v13.csv` sha256 `c878a5677f4bab1a30134ae6d795bbc5cff265483b73fc34a008e47c63625eb0` (v12 + pipeline Task 3; same diff counts as above), `submission_clean_v13.csv` = `submission.csv` sha256 `bf4c4a364cf0c35b2518b8776b77823e1bbc288d9bfead45b33efd9f448c72f2`. The three format-variant files change in Task 3 only. The earlier sha256 values in this item are superseded.
+
+## Round 15 (2026-11-12): five "structural blind spot" checks (`cd_r15_blindspots.py`, logs `outputs/cd_r15_t124.log`, `outputs/cd_r15_t3.log`)
+
+Baseline = the current pipeline / v13. Nothing passes, so no new submission (v13 stays the candidate). Every fit uses training rows only; nested = chosen on four folds, scored on the fifth.
+
+**1. Binary vs macro F2 (Task 1).** The code uses positive-class F2 (`src/config.py` `FBETA_AVERAGE = "binary"`, `optimize_threshold` default); the macro reading exists only as `outputs/format_variants/submission_task1_macro_F2.csv`. OOF: tau_binary 0.15035 (binary 0.83829, macro 0.71475; 15,690 test ones = v12); tau_macro 0.400 (binary 0.74093, macro 0.78015; 9,897 ones, **5,793 test labels flip**); max-min compromise 0.355 (binary 0.77770, macro 0.77742; 4,363 flips). Switching to tau_macro would cost 0.097 F2 = **0.0195 LB** if the scorer is binary; the compromise costs 0.061 F2 = 0.012 LB. Our own uploads already settle it: v3 -> v4 observed -0.00234, binary predicts -0.00265, macro -0.00023. Task 5 has no cut-off to choose: v12/v13 = the id block, which is optimal under both readings if the block is the truth.
+
+**2. Task 3 tail (B0 0.794578, the 10-seed pipeline).**
+- Error by group of the prediction: predicted 0 = 51,902 rows, 2.6% of the error; deciles 8-10 of the positive predictions (7,768-300,000 THB) = 83.7% of the error and 93.0% of total y. Every decile has 48-51% of y above the prediction (a centred median), and sum(pred)/sum(y) is 0.90-1.02 in deciles 8-10. No compression of the tail.
+- Nested power calibration a * yhat^b: a 0.94-0.98, b 1.002-1.006, -0.00010, CI [-0.00015, -0.00004], 2/5 -> discard. With a zero cut-off: tau0 0-0.1 THB, same result.
+- Raw-scale members: LGB-L1, XGB-L1, Cat-MAE (already in the pool) get weight 0.0 in every fold. New raw Huber members (LightGBM 0.78193, CatBoost 0.78027 alone) also get 0.0 in every fold (delta exactly 0). Forced 10/20/30% mixes of raw L1 or Huber: -0.00024 to -0.00207, 0/5 folds in every case.
+- Why: an L1 model on log1p(y) (and the mixture-median read-out) estimates the conditional median of y itself, because the median commutes with a monotone transform. The median is already the absolute-error optimum, so it is not a "relative error" estimate that a raw-scale model would correct.
+
+**3. player_id (Tasks 2 and 5).**
+- Task 2: the id block decides 100% of v12/v13 test rows; features are never consulted (no tie-break). The clean feature pipeline disagrees on 5,429 test rows (21%). Train flips (label != block) = 3,117 = 2.997%, spread evenly over the other three classes of each block. Features cannot see them: AUC 0.507, mean P(block) 0.685 on flipped rows vs 0.690 on the rest, the feature argmax equals the true label on 7.3% of flips. Neighbouring ids carry nothing: P(flip | previous id flipped) 0.0298 vs base 0.0300; the majority label of the k nearest training-fold ids (k = 2, 6, 20) reproduces the block (agreement 0.978-1.000) and never recovers a flip. Nested soft prior (features override the block only above a learned log-odds margin): the margin chosen is 5 in every fold, i.e. never override, +0.00000. 0.968 is the random-flip ceiling.
+- Task 5: the id rule decides 100% of rows; detectors are not combined. Disagreements (round 14): 145 pocket flags and 69 evidence-rule hits outside the block (the latter the known date-line false positives); 24 block accounts no detector flags. The 500 ids below the cut look like a far control band.
+
+**4. Task 4.** `t4_round11_probes.npz` = round-11 frozen CLIP / DINOv2 / SigLIP linear probes (worse than the fine-tuned models, discarded). v12/v13 Task 4 = ConvNeXt-Tiny + DeiT-III-S (5-fold + full-data models, h-flip TTA, class multipliers), datacard codes, test.csv row order. If the key is unrelated to our column, class k scores 2 p_k q_k / (p_k + q_k) in expectation, which is maximised at p = q and gives exactly 0.200: re-mixing classes cannot beat chance (our mix 0.200 against our own predicted mix; 0.184 against the training mix). Random alignments on a 12,944-row public half differ by SD 0.0037 on Task 4 = 0.00075 LB; the 0.00067 gap to #1 is 0.9 SD. Building a class-mix variant would mean tuning to a broken key and could only be checked by uploading (probing), so nothing was built.
+
+**5. Seeds and cut-off smoothing.** Seeds were settled in round 14: Task 1 10-seed bag discarded (v13 keeps 1 seed for LGB/XGB/Cat/ET and 2 for the 24-column members), Task 2 is the id block (clean 10-seed bag discarded), Task 3 already uses 10 seeds. Task 1 cut-off rules vs B0 (pipeline argmax, nested 0.83794):
+
+| Rule | nested F2 | delta | 95% CI | folds | test-like | full-data tau | test flips | Decision |
+|---|---|---|---|---|---|---|---|---|
+| Gaussian-smoothed curve, sigma 0.005 | 0.83810 | +0.00016 | [-0.00004, +0.00035] | 4/5 | +0.00004 | 0.1525 | 42 | discard |
+| sigma 0.01 | 0.83798 | +0.00004 | [-0.00018, +0.00025] | 3/5 | -0.00014 | 0.1535 | 57 | discard |
+| sigma 0.02 | 0.83808 | +0.00013 | [-0.00016, +0.00043] | 3/5 | +0.00008 | 0.1565 | 122 | discard |
+| sigma 0.04 | 0.83824 | +0.00030 | [-0.00002, +0.00059] | 3/5 | +0.00026 | 0.1565 | 122 | discard |
+| median of 1,000 bootstrap argmaxes | 0.83802 | +0.00008 | [-0.00006, +0.00022] | 2/5 | -0.00004 | 0.1510 | 12 | discard |
+
+The OOF curve is flat: F2 stays within 0.0005 of the best for tau 0.1415-0.1665, a band holding 426 test rows, so any of these cut-offs changes at most ~0.0001 LB.
+
+## Round 16 (2026-11-12): micro-gain harvesting (`ce_r16_t1_members.py`, `cf_r16_eval.py`; logs `outputs/cf_r16_t1.log`, `cf_r16_t2t5.log`, `cf_r16_t5.log`, `cf_r16_t3.log`)
+
+The brief asked to keep +0.0001 to +0.0004 variance-reduction gains even when the CI overlaps zero. Two rules are printed: strict (as before) and **relaxed = mean nested gain > 0 (and for Task 1 test-like gain >= 0)**. v14 would use the relaxed rule. TabM is within the rules: our own PyTorch BatchEnsemble MLP trained from scratch on training folds (not pre-trained, not AutoML). **Nothing passes even the relaxed rule, so no v14 was built (it would equal v13).**
+
+**Task 1** (B0 = v13, nested 0.83794, test-like 0.85046). TabM and spline-LR retrained with test predictions (`outputs/r16_t1_members.npz`; OOF corr with round 12: 0.999 / 0.99999); 10-seed bag refitted on Train+Val (`by_r14_bag.py full t1`). Alone: TabM 0.81492, spline-LR 0.80825, 10-seed stack 0.83858; corr(stack, TabM) 0.907. Order fixed before the run: (1) brief recipe, (2) bag + smoothed cut-off, (3) bag + argmax.
+
+| Variant | nested F2 | delta | 95% CI | folds | test-like delta | test flips vs v13 | strict | relaxed |
+|---|---|---|---|---|---|---|---|---|
+| (1) 0.88 bag + 0.08 TabM + 0.04 spline, smoothed cut | 0.83754 | -0.00041 | [-0.00095, +0.00019] | 2/5 | -0.00046 | 260 | discard | discard |
+| (2) 10-seed bag, smoothed cut | 0.83831 | +0.00037 | [-0.00007, +0.00084] | 3/5 | -0.00041 | 138 | discard | discard |
+| (3) 10-seed bag, argmax cut | 0.83833 | +0.00039 | [-0.00008, +0.00085] | 3/5 | -0.00038 | 151 | discard | discard |
+| (4) brief blend, argmax cut | 0.83725 | -0.00069 | [-0.00128, -0.00013] | 2/5 | -0.00096 | 270 | discard | discard |
+| (5) brief blend, bootstrap-median cut | 0.83720 | -0.00074 | [-0.00132, -0.00018] | 1/5 | -0.00105 | 260 | discard | discard |
+| bag + 5% TabM, smoothed | 0.83826 | +0.00031 | [-0.00018, +0.00079] | 3/5 | -0.00034 | 166 | discard | discard |
+| bag + 10% TabM, smoothed | 0.83790 | -0.00005 | [-0.00058, +0.00047] | 3/5 | -0.00040 | 234 | discard | discard |
+| bag + 15% TabM, smoothed | 0.83737 | -0.00058 | [-0.00118, -0.00000] | 2/5 | -0.00131 | 326 | discard | discard |
+| bag + 8% TabM + 8% spline, smoothed | 0.83679 | -0.00115 | [-0.00180, -0.00049] | 0/5 | -0.00173 | 350 | discard | discard |
+
+The brief's blend lowers F2: mixing in members 0.02-0.03 weaker that are 0.85-0.91 correlated adds bias, not just variance reduction. The 10-seed bag's +0.0004 on ordinary OOF rows turns into -0.0004 on test-like rows (the test has far fewer missing cells), so its expected test effect is negative.
+
+**Task 3** (B0 = v13, 0.794578). Forced 5/8/12% blends (gated, capped) of seven other families: LGB-L1 log1p, Tweedie, XGB-L1 raw, single-seed ratio[hist] LGB, plain hurdle, new CatBoost-MAE raw depth 6 (alone 0.78055), new ridge log1p stage 2 + mixture-median (non-GBDT, alone 0.77912): all -0.00001 to -0.00049, 0-2/5 folds. Cap: in-sample NMAE peaks at 300k (250k 0.794323 ... 300k 0.794578 ... 350k 0.794462); nested choice 290-300k, -0.000014. v13 test: 7 predictions >= 250k, 1 at the 300k cap.
+
+**Task 5.** The 25 most extreme outside-block accounts by consensus: 19 carry the `impossible_coords` rule (the known date-line coordinate artefact), the rest are geo extremes; none is a pocket flag. Top 0.1% inside the block: geo_km_per_login_4 21/21, geo_hop_max 26/26, device_count_maxjump 100/100, device_count_dev4 31/31 (the generated anomaly types sit entirely in the block), login_count_maxjump 1/26 (a natural tail). F3: adding 20 pays +0.0039 if half are real, -0.0010 if none; break-even P = 0.20. No labelled way to verify, evidence points the other way -> no change.
+
+**Task 2.** total_spending_thb and avg_monthly_spending by id-block class in test match train by true label (e.g. Whale median 45,396 vs 45,024); every class bottoms out near 500 THB, no true Whale has 0 spending, and flipped rows look like their block. Flip rate is flat across spending deciles (2-4%). No deterministic contradiction -> no change.
+
+## Round 17 (2026-11-12): the TAs' data re-release (`scripts/reorder_task4_test_cache.py`, `cg_r17_new_data_check.py`)
+
+The TAs announced a data fix: Task 1 and Task 3 unchanged, Task 2 and Task 5 new datasets, Task 4 `test.csv` corrected, schema unchanged. Sources: the Kaggle zip (`player-intelligence-system-cpe-342-ml`, downloaded by the user) for Tasks 1, 2, 3, 5 and the TAs' Drive zip (modified 2026-11-12 07:55 UTC, 625.5 MB) for Task 4.
+
+**What changed (checked by sha256 against git HEAD).**
+* Task 1, Task 3, all datacards and `sample_submission.csv`: byte-identical.
+* Task 2 train/test and Task 5 test: fully regenerated. No row's numeric features match an old row; column means move by at most 0.02 SD; same shapes (104,000 / 25,889 / 25,889).
+* **Task 2's player_id leak is gone.** Class shares are flat over all ten id deciles (Casual 0.391-0.399), and an id-only LightGBM gets OOF macro-F1 0.141 (old data: 0.968). Train and test ids do not overlap.
+* **Task 4:** the 57,435 images are byte-identical (zip CRC), and the train labels are identical (now integer codes, columns `id, file_name, label`). `test.csv` lists the same 25,889 test images in a **new order**: ANS00001 = `sjqyfwc.jpg` (old row 22,721), and no row kept its position. Our old-order Task 4 column agrees with the correctly re-ordered one on **21.25%** of rows, which matches the ~0.21 the leaderboard implied for Task 4 on every upload from v1 to v12: the answer key was in the new order all along.
+
+**What we ran.**
+* Task 4: `scripts/reorder_task4_test_cache.py` moves every cached test prediction to the row that now holds its image and stores `test_file_name`. The notebook asserts it; `train_task4.py` now writes it. Fresh inference of the fold-0 ConvNeXt and DeiT checkpoints on 512 new-order rows: argmax agrees 100%, max |prob diff| 0.004 (bf16). The old CSVs are kept in `_release_2026-11-03/`. `src/task4.load_frames` reads both formats.
+* Task 2: all `t2_*` caches deleted and retrained (tuned hyperparameters reused). OOF macro-F1: LightGBM 0.7559, XGBoost 0.7559, CatBoost 0.7545, LogReg 0.7435, stacker 0.7561, **+ class multipliers 0.7568** (old data 0.7549).
+* Task 5: the unchanged label-free pipeline finds the same structure as before: 33 tail clusters → **6 families, 1,809 accounts (6.99%)**; the derived-feature gap scan adds 0; the blind pocket scan finds exactly one pocket again (accuracy_std × kda_std, z above the noise level of 10.9), with cut-off k = 339 (estimated 194 members) → **2,148 flags (8.30%)**, expected F3 0.990 if the families are true.
+* Tasks 1 and 3 reuse their caches: their columns are identical to `submission_clean_v13.csv` (0 rows differ).
+
+**Result.** `submission.csv` (sha256 53c386ca…) is the first file whose every column belongs to the current test sets. Nothing in it uses player_id. Every earlier file (v1-v13 and the clean files) has Task 4 in the wrong order and Task 2/5 predictions for test rows that no longer exist; do not upload them.

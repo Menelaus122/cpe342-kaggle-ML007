@@ -545,11 +545,21 @@ Class-wise multipliers are then tuned on the OOF blend for macro-F1, and kept on
 """)
 code(r"""
 y4 = t4_train.label.values
+t4_names = np.array(t4_test.file_name.tolist(), dtype="U")
+
+
+def check_t4_order(z, name):
+    # every cache must list the test images in test.csv order (row i = ANS{i}); scripts/reorder_task4_test_cache.py
+    # moved the caches made under the first release (other row order) into the 2026-11-12 order
+    assert "test_file_name" in z.files and (z["test_file_name"] == t4_names).all(), f"{name}: test rows not in test.csv order"
+
+
 oof_tag, test_tag, per_fold = {}, {}, []
 for tag in T4_TAGS:
     oof_tag[tag], test_tag[tag] = np.zeros((len(y4), 5)), np.zeros((len(t4_test), 5))
     for f in range(N_FOLDS):
         z = np.load(C.PRED_DIR / f"t4_{tag}_fold{f}.npz")
+        check_t4_order(z, f"t4_{tag}_fold{f}")
         oof_tag[tag][z["val_idx"]] = z["val_probs"]
         test_tag[tag] += z["test_probs"] / N_FOLDS
         per_fold.append([tag, f, f1_score(y4[z["val_idx"]], z["val_probs"].argmax(1), average="macro")])
@@ -790,6 +800,8 @@ changes.append(["Task 3", "corr(log1p before, after)", np.corrcoef(np.log1p(pred
 test4_final = []
 for tag in T4_TAGS:
     pth = C.PRED_DIR / f"t4_{tag}_full.npz"
+    if pth.exists():
+        check_t4_order(np.load(pth), pth.stem)
     test4_final.append(blend_full(test_tag[tag], np.load(pth)["test_probs"]) if pth.exists() else test_tag[tag])
     print(f"Task 4 {tag}: full-data model {'included' if pth.exists() else 'NOT found -> 5-fold ensemble only'}")
 pred4_final = apply_class_weights(np.mean(test4_final, axis=0), W4)
