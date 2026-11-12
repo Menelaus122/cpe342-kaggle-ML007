@@ -11,7 +11,12 @@ Thumbs.db
 
 # ---- large artefacts (not in git)
 # Task 4 images: download from the Drive link in 04_image_classification/README.md
-04_image_classification/_download/
+04_image_classification/_download/*
+# ...but keep the two Task 4 CSVs (2026-11-12 release: id, file_name, label) in git
+!04_image_classification/_download/task4_image_classification/
+04_image_classification/_download/task4_image_classification/*
+!04_image_classification/_download/task4_image_classification/train.csv
+!04_image_classification/_download/task4_image_classification/test.csv
 # Task 4 checkpoints (~90-110 MB each): `gh release download t4-checkpoints -D outputs/models`
 outputs/models/
 *.pt
