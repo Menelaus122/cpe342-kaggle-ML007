@@ -217,11 +217,12 @@ def predict_paths(model, paths, img_size, bs=128, tta=True, chunk=4096):
 
 def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epochs=10, bs=64,
                lr=2e-4, wd=0.05, label_smoothing=0.1, mix_prob=0.8, seed=42, log=print, ckpt_path=None, aug_kw=None,
-               class_balanced=False):
+               class_balanced=False, layer_decay=None):
     """Train one fold on the shared preloaded uint8 array `arr` (rows tr_idx); returns
     (model carrying the final EMA weights, history). With an empty `va_idx` it trains on all given
     rows without per-epoch validation (final Train+Val refit). class_balanced=True draws each epoch's rows with
-    probability 1/(class count), so every class is seen equally often (uniform prior, matching macro-F1)."""
+    probability 1/(class count), so every class is seen equally often (uniform prior, matching macro-F1).
+    layer_decay (e.g. 0.75) gives each block lr * decay^(depth from the top), so pre-trained ViT layers move less."""
     from sklearn.metrics import f1_score
     from timm.utils import ModelEmaV3
 
@@ -238,7 +239,14 @@ def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epo
 
     model = create_model(model_name, img_size=img_size).to(device).to(memory_format=torch.channels_last)
     ema = ModelEmaV3(model, decay=0.999)
-    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+    if layer_decay is None:
+        opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+    else:
+        from timm.optim import param_groups_layer_decay
+        groups = param_groups_layer_decay(model, weight_decay=wd, layer_decay=layer_decay)
+        for g in groups:                        # torch schedulers ignore timm's lr_scale, so bake it into lr
+            g["lr"] = lr * g.pop("lr_scale", 1.0)
+        opt = torch.optim.AdamW(groups, lr=lr, weight_decay=wd)
     n_steps_ep = len(tr_idx) // bs
     steps, warm = epochs * n_steps_ep, n_steps_ep
     sched = torch.optim.lr_scheduler.LambdaLR(

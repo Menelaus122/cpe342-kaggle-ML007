@@ -34,6 +34,9 @@ RECIPES = {   # name -> (timm model, HxW, extra train_fold kwargs)
     "eva02_s": ("eva02_small_patch14_336.mim_in22k_ft_in1k", (168, 336), {}),
     "effv2_s": ("tf_efficientnetv2_s.in21k_ft_in1k", (160, 320), {}),
     "cnxt22k": ("convnext_tiny.fb_in22k", (160, 320), {}),
+    # ViTs with a small learning rate and layer-wise decay (round 19; eva02_s above used ConvNeXt's 2e-4 and no decay)
+    "eva02_s_ld": ("eva02_small_patch14_336.mim_in22k_ft_in1k", (168, 336), {"lr": 5e-5, "layer_decay": 0.75}),
+    "clip_b16_ld": ("vit_base_patch16_clip_224.openai", (160, 320), {"lr": 3e-5, "layer_decay": 0.65}),
 }
 
 
@@ -106,8 +109,8 @@ def main(names):
         model_name, size, kw = RECIPES[name]
         t0 = time.time()
         log(f"{name}: {model_name} {size} {kw or ''}")
-        model, hist = task4.train_fold(model_name, arr, y, tr_idx, va_idx, img_size=size, epochs=10, bs=64, lr=2e-4,
-                                       seed=42, log=log, **kw)
+        model, hist = task4.train_fold(model_name, arr, y, tr_idx, va_idx, img_size=size, log=log,
+                                       **{"epochs": 10, "bs": 64, "lr": 2e-4, "seed": 42, **kw})
         vp = task4.predict_array(model, arr[va_idx], size, tta=True)
         np.savez(out, val_idx=va_idx, val_probs=vp, secs=time.time() - t0)
         log(f"{name}: held-out acc {(vp.argmax(1) == y[va_idx]).mean():.4f}")
