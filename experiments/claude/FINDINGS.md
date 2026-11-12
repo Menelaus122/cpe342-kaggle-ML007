@@ -922,3 +922,33 @@ The TAs announced a data fix: Task 1 and Task 3 unchanged, Task 2 and Task 5 new
 * Tasks 1 and 3 reuse their caches: their columns are identical to `submission_clean_v13.csv` (0 rows differ).
 
 **Result.** `submission.csv` (sha256 53c386ca…) is the first file whose every column belongs to the current test sets. Nothing in it uses player_id. Every earlier file (v1-v13 and the clean files) has Task 4 in the wrong order and Task 2/5 predictions for test rows that no longer exist; do not upload them.
+
+## Round 18 (2026-11-12): v14 scored 0.84873, the "two-front" brief (`ch_r18_t4_shift.py`, `cj_r18_t4_tta.py`, `ci_r18_t2_audit.py`; logs in `outputs/`)
+
+**Where the gap is.** v14 = 0.84873 (top 0.85787). v12 (old data, T2/T5 by id block, T4 in the wrong order) = 0.76248 gives T1 + T3 ≈ 1.644 → T1 ≈ 0.85 on test (the test-like estimate was 0.8505). Then v14 leaves T4 + T5 ≈ 1.84. With T5 ≈ 0.98 as on the old data, **T4 ≈ 0.86 on test** (OOF 0.989), in line with round 11's label-free 0.87–0.91. All 10 fold models agree on only 74% of test images.
+
+**Task 4, held-out-cluster validation (training images only).** K-means (20 clusters per class) on frozen DINOv2-B features, StratifiedGroupKFold(5) by cluster, fold 0 (6,354 held-out images in 20 clusters). A frozen DINOv2 probe drops from 0.911 (stratified) to 0.829 (held-out clusters), close to its estimated test accuracy, **but fine-tuned models hardly drop at all** (ConvNeXt 0.9836 vs 0.990 stratified). So this split does not reproduce what happens on the test images, and it can only rank recipes inside the training distribution:
+
+| Recipe (fold 0, same rows, 10 epochs, h-flip TTA) | acc | macro-F1 | Δ acc vs ConvNeXt [95% CI] |
+|---|---|---|---|
+| ConvNeXt-T in12k (pipeline) | 0.9836 | 0.9805 | — |
+| DeiT-III-S (pipeline) | 0.9811 | 0.9787 | −0.0025 [−0.0055, +0.0006] |
+| ConvNeXt-T, class-balanced sampling | 0.9816 | 0.9783 | −0.0020 [−0.0046, +0.0005] |
+| EVA02-S (MIM in22k) | 0.9762 | 0.9735 | −0.0074 [−0.0107, −0.0041] |
+| EfficientNetV2-S in21k | 0.9806 | 0.9779 | −0.0030 [−0.0061, +0.0000] |
+| ConvNeXt-T in22k | 0.9819 | 0.9792 | −0.0017 [−0.0044, +0.0008] |
+| pipeline pair (ConvNeXt + DeiT) | 0.9852 | 0.9826 | |
+| all six averaged | 0.9862 | 0.9837 | +0.0010 over the pair (~6 images) |
+
+Decision rules on the same held-out set (ConvNeXt): logit adjustment logits − τ·log π_train: τ = 0 → 0.9805, 0.5 → 0.9787, 1 → 0.9757 (this split keeps the train class mix, so it cannot show a label-shift gain). Class multipliers fitted on the held-out set itself (an upper bound): 0.9843, but with unstable, extreme weights (Roblock 0.36 vs 0.21 for the class-balanced model) → not transferable. `task4/train.csv` carries no metadata (id, file_name, label only).
+
+TTA / photometric restoration (pipeline fold-0 checkpoints on their own 6,310 validation images; dark or low-contrast subset = 833): every view set lies within ±0.0006 F1 of the pipeline's original + flip (ensemble 0.9878). Autocontrast lowers the hard subset (0.9799 → 0.9775), gamma for dark images changes nothing, ±10° rotations and zoom-out 0.85 move 0–5 images. The training augmentation already covers darkness, inversion, rotation and noise.
+
+**Task 2 on the new data: 0.757 is the Bayes ceiling.**
+* Stack 0.7561 → + multipliers 0.7568 in-sample, **0.7564 nested**. Members' P(true class) correlate 0.99 (LGB/XGB/Cat) and 0.94 (LogReg).
+* Confusion: Casual F1 0.822, Grinder 0.746, Whale 0.748, Social 0.711 (recall 0.678). Most confused pairs: Casual↔Grinder (8,439 rows), Casual↔Social (5,737), Social↔Whale (4,042).
+* The old feature design still fits: every engagement/spending indicator keeps its sign; the 3 `random_metric` columns are pure noise (|ρ| ≤ 0.003); class shares in the engagement × spending grid 0.394/0.202/0.250/0.154.
+* Features are independent given the class (within-class |rank corr| mean 0.004–0.010, max 0.054). Under that independence a naive-Bayes rule on per-feature class histograms is the Bayes classifier: it scores **0.7549 (0.7559 with multipliers)**, the same as the GBDTs. Adding it to the stack: +0.0001 nested.
+* Calibration is exact (accuracy 0.811 at mean p 0.811; 0.961 at p ≥ 0.95): the remaining errors are label noise. The brief's 0.775 is not reachable.
+
+**Decision:** nothing passes; no v15. The Task 4 test shift is real but no train-only validation reproduces it, so no Task 4 change can be shown to help. Options left need a ruling: (1) prior correction toward the test class mix (1,095 labels move; TA question), (2) using unlabeled test images to characterise the shift for augmentation design (grey area; ask first).

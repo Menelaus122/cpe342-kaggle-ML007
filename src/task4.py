@@ -216,10 +216,12 @@ def predict_paths(model, paths, img_size, bs=128, tta=True, chunk=4096):
 
 
 def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epochs=10, bs=64,
-               lr=2e-4, wd=0.05, label_smoothing=0.1, mix_prob=0.8, seed=42, log=print, ckpt_path=None, aug_kw=None):
+               lr=2e-4, wd=0.05, label_smoothing=0.1, mix_prob=0.8, seed=42, log=print, ckpt_path=None, aug_kw=None,
+               class_balanced=False):
     """Train one fold on the shared preloaded uint8 array `arr` (rows tr_idx); returns
     (model carrying the final EMA weights, history). With an empty `va_idx` it trains on all given
-    rows without per-epoch validation (final Train+Val refit)."""
+    rows without per-epoch validation (final Train+Val refit). class_balanced=True draws each epoch's rows with
+    probability 1/(class count), so every class is seen equally often (uniform prior, matching macro-F1)."""
     from sklearn.metrics import f1_score
     from timm.utils import ModelEmaV3
 
@@ -248,7 +250,11 @@ def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epo
     for ep in range(epochs):
         model.train()
         t0, tot, n = time.time(), 0.0, 0
-        perm = rng.permutation(tr_idx)
+        if class_balanced:
+            w = 1.0 / np.bincount(labels[tr_idx], minlength=5)[labels[tr_idx]]
+            perm = rng.choice(tr_idx, size=len(tr_idx), replace=True, p=w / w.sum())
+        else:
+            perm = rng.permutation(tr_idx)
         for b in range(n_steps_ep):
             idx = np.sort(perm[b * bs:(b + 1) * bs])
             x = aug(to_gpu_batch(arr[idx], img_size, device))
