@@ -1060,3 +1060,76 @@ Objective fixed in advance: mean of out-of-fold macro-F1 on full frames and on t
 
   Seven − six: cnxtS_hud objective +0.0008 [−0.0002, +0.0018], full +0.0005 [−0.0001, +0.0013] → **fail** (CI includes 0, though positive on every view); cnxt_hud8 +0.0002 [−0.0008, +0.0012] → fail. Stronger HUD dropout trades full-frame accuracy for little. ConvNeXt-S is the better single model on every view, but at batch 64 it overflows the 8 GB GPU into shared memory (~990 s per epoch vs ~120 s for Tiny): 5 folds + full would take ~16 h as is.
 * **No v16:** no rule or candidate passed, so the pipeline stays at v15. With Task 4 at ~0.87 on test against 0.97 on the HUD-free proxy, most of the remaining test gap is content these train-only proxies cannot simulate; the open TA questions (prior alignment, test-image-informed augmentation) are the remaining large levers.
+
+## Round 21 (2026-11-13): Task 2 generative models, Task 5 tail (`cs_r21_t2_generative.py`, `ct_r21_t5_tail.py`)
+**Task 2.** Generative classifiers fitted per fold on the round-19 data-generating process (pipeline stack: nested 0.7564):
+
+| model | alone, nested multipliers | as a 5th stack member, nested Δ [95% CI], folds |
+|---|---|---|
+| histogram naive Bayes (round 18) | 0.7553 | −0.0000 [−0.0007, +0.0007], 3/5 |
+| censored-normal (Tobit) naive Bayes | 0.7518 | −0.0000 [−0.0007, +0.0008], 3/5 |
+| KDE marginals + clip-bound masses | 0.7572 | −0.0002 [−0.0009, +0.0005], 1/5 |
+| KDE + Gaussian copula for Whale | 0.7564 | +0.0003 [−0.0005, +0.0010], 3/5 |
+| KDE + copula for every class | 0.7557 | +0.0001 [−0.0005, +0.0008], 4/5 |
+
+* The normal assumption costs (Tobit 0.7518; sklearn GaussianNB with median imputation 0.604): several marginals are skewed (gamma-like for the low-activity classes). The Whale copula does not move the ceiling.
+* Not pre-registered: 0.5 stack + 0.5 KDE naive Bayes, nested 0.7575 (+0.0011 [+0.0002, +0.0020], 5/5); with the blend weight also chosen nested (0.5-0.75) +0.0011 [+0.0000, +0.0021], 5/5; histogram / Tobit blends do nothing. **But** the rule-strict version (density grid on training values only instead of the train + test range; 99.99% identical predictions) gives +0.0008 [−0.0001, +0.0017], 4/5. A change touching 0.01% of rows moves the gain by 0.0003, so it is noise-level (about +0.0002 LB at best). Task 2 stays as it is (user rule: lock unless clearly past 0.7570).
+
+**Task 5.** v15 flags 2,148 (six families 1,809 + pocket 339).
+* Detector scale: the pipeline's robust-z cross-check fusion is 92% Mahalanobis (MCD); the final flags do not use it. Rank-mean / robust-z mean / soft-OR fusions recover only 52-58% of the flags in their top 2,148 (Jaccard 0.51-0.87 between fusions).
+* A "gap" of 469 unflagged accounts under the MCD-dominated fusion is an artefact: they are exactly the unflagged accounts with `mass_item_sale = 1` (rare binary column, near-zero variance in the MCD core), otherwise normal (median max |z| 1.12 vs 1.01). Rank fusion has no gap (lambda <= 8.9; families need >= 50).
+* F3 arithmetic: if all 2,148 flags were true and the true rate were 10% / 12% / 14%, F3 would be 0.844 / 0.713 / 0.618; the public score leaves T4 + T5 of about 1.85, so a 12-14% true rate is incompatible with it.
+
+## Round 22 (2026-11-13): plan and code (runs queued behind ConvNeXt-Small)
+* `GPUAugment(p_grid=...)`: GridMask or one large block hiding 65-85% of the frame (unit-checked: 61-84% hidden; defaults bit-identical). A low-light augmentation was written and removed again before any run (section 7.4: test confidence is lower in every brightness / contrast bin; round 18 gamma views gave nothing). Mosaic not added (CutMix/Mixup p = 0.8 already).
+* `task4.create_model`: backbones in `NATIVE_NORM` (SigLIP / CLIP / EVA02-CLIP) get a forward pre-hook mapping ImageNet-normalised input to their own mean/std (SigLIP: 0.5/0.5; checked: pixel 0.5 reaches the patch embedding as 0.0). Existing members are unchanged.
+* `train_task4.py`: `--p-grid`, `--layer-decay`, `--grad-ckpt` (ConvNeXt-Small at batch 64: peak 6.9 -> 2.1 GB, 574 ms/step; the 2.6 GB image array on the GPU had pushed it into shared memory, ~990 s/epoch).
+* Queue: seven-vs-six all-fold check (`cw_r21_t4_seven.py`), fold 0 of `cnxt_grid` (ConvNeXt-T, HUD 0.5 + GridMask 0.2) and `siglip2_hud` (SigLIP 2 ViT-B/16, lr 2e-5, layer decay 0.75, HUD 0.5), `cv_r22_t4_eval.py` (pass rule: objective CI > 0, full >= −0.0005, real dark / low-contrast frames not lower); SigLIP folds 1-4 + full only if it passes, otherwise the held-out-cluster runs (`ch_r18_t4_shift.py cnxt_hud cnxt_grid siglip2_ld`).
+* **ConvNeXt-Small (cnxtS_hud) over all five folds** (`cw_r21_t4_seven.py`; trained with `--grad-ckpt`, ~45 min per fold, full refit 45 min). Out-of-fold macro-F1 on 31,546 images:
+
+| | full | bottom grey | centre grey | zoom 70% |
+|---|---|---|---|---|
+| cnxtS_hud alone | 0.9861 | 0.9812 | 0.9587 | 0.9667 |
+| cnxt_hud alone | 0.9845 | 0.9774 | 0.9542 | 0.9635 |
+| six (v15) | 0.9883 | 0.9831 | 0.9587 | 0.9705 |
+| seven (+ cnxtS_hud) | 0.9886 | 0.9842 | 0.9608 | 0.9715 |
+
+  Seven − six: objective +0.0007 [+0.0002, +0.0011], better in 5/5 folds (+0.0008 / +0.0009 / +0.0007 / +0.0003 / +0.0008); full frames +0.0003 [−0.0001, +0.0008]. Pre-registered rule (mean objective gain > 0, full >= −0.0005) -> **include**: v16 = v15 with cnxtS_hud as the seventh Task 4 member (plain mean, unchanged decision rule). The fold-0 estimate of round 20 (+0.0008, CI through 0) was the same size; five folds narrow the interval.
+
+## Round 23 (2026-11-13): audit after dropping to 3rd (`cx_r23_t2_audit.py`, `cy_r23_t4_prior_temp.py`, `da_r23_t5_extend.py`, `db_r23_t5_flag_pockets.py`)
+**Task 2** (stack nested 0.7564; OOF confusion: Casual-Grinder 8,439 errors, Social recall 0.678 / F1 0.711; accuracy 0.7702, weighted-F1 0.7688).
+* Non-linear within-class dependence: binned mutual information of all 325 continuous pairs per class vs column-shuffled data: Casual max 0.0064 (noise 0.0065), Grinder 0.0100 (0.0100), Social 0.0124 (0.0128) -> independent given the class, not just uncorrelated.
+* Temperature-scaled KDE naive Bayes: log-loss 0.6250 -> 0.6202 (stack 0.6047); same macro-F1.
+* LightGBM + the brief's ratios and row-wise group z-summaries: 0.7559 -> 0.7547 alone; in the stack −0.0002 / −0.0005. MLP (3 seeds) 0.7494 alone, +0.0000 in the stack; Nystroem-RBF 0.7331, −0.0005; KNN 0.62-0.66, −0.0006 to −0.0000. Multipliers with a (w − 1)^2 penalty (lambda 0.05-0.2): −0.0003 to −0.0005. **Nothing passes.**
+* Nominal columns on the new data: Cramer's V <= 0.008, p > 0.1 (all seven). player_id: all five tasks draw from one universe P000000-P129999 (80% of T2 train ids also in T1/T3 train), but the same id is not the same player: same-named columns correlate 0.00 across tasks, other tasks' columns eta^2 <= 0.0007 with the segment. No duplicates. Predicted class mix on test = on OOF (no prior shift).
+* A competitor's "+0.01 over naive Bayes": our accuracy / weighted-F1 already sit +0.013 above our macro-F1, and single folds range 0.7536-0.7593, so a metric or hold-out difference explains it; GaussianNB (0.604) would not.
+
+**Task 4.** (a) Prior: macro-F1 on OOF as is vs re-weighted to a balanced 20% class mix (rows weighted 0.2 / pi):
+
+| rule | training mix: full / zoom70 | balanced mix: full / zoom70 | test labels changed |
+|---|---|---|---|
+| argmax (v15) | **0.9883** / **0.9705** | 0.9869 / 0.9678 | - |
+| p * pi^-0.5 | 0.9876 / 0.9694 | 0.9879 / 0.9697 | 631 |
+| p * pi^-0.75 | 0.9870 / 0.9687 | **0.9882** / **0.9705** | 917 |
+| p * pi^-1 | 0.9859 / 0.9661 | 0.9878 / 0.9701 | 1,172 |
+
+A bet on the test class mix: it wins as much under a balanced test as it loses under the training mix. The exponent uses no test data, but the reason to switch (predicted test mix: 17% 7-Eleven vs 39% in training) is the grey area of the unsent TA question -> not applied without the user / TA.
+(b) Calibration: all backbones are similarly under-confident (temperature 0.52-0.55; EfficientNetV2 0.43); averaging calibrated probabilities (0.9880 / 0.9703) or log-probabilities (0.9882 / 0.9704) does not beat the plain mean (0.9883 / 0.9705).
+
+**Tasks 1, 3, 5 sanity.** T1: mean P(cheater) 0.349 OOF and test; flag rate 64.3% OOF vs 60.7% test because test rows miss fewer values (8.0% vs 12.0% NaN), which round 11 showed raises F2. T3: test mean 10,462 vs training target 10,497, zero share 0.50 vs 0.48 (median gate). T5: unique ids, 0/1. Row order: T1/T2/T3/T5 map by position; a scrambled column would show on the LB (e.g. T2 near 0.25).
+
+**Task 5 extension to 10-12%** (a competitor flags more than 8.3%). Label-free; F3 needs more than ~10% anomalies among the added accounts.
+* Pocket continuation: its permutation null estimates 7 members among the next 440 (1.5%) -> expected F3 0.990 -> 0.972 (10%), 0.948 (12%).
+* Ensemble (rank mean) additions: high flag rates only because the ensemble reads the flags (circular; v4 on the first release: +474 such alerts lowered the LB by 0.0023, i.e. about 4% anomalies).
+* Family edges, pooled: password_changed 0.066 vs 0.033 looked like 16-22% members; per family it vanishes: edges of the flag-heavy families (takeover `location_changes_4`, `geo_hop_max`, `currency_transfers_4`, `play_pattern_consistency_4`; family password rates 0.59-1.00) have normal flag rates (estimated share −0.05 to +0.03).
+* Flag x continuous-feature pockets (the pipeline's pair scan skips binary columns): no cell above the shuffled-flag noise level (max z 3.0-4.1 vs 4.2-4.5).
+* **Keep the 2,148 flags.** No extension has evidence above the F3 bar.
+
+## Round 24 (2026-11-13): "Task 4 should be 0.99" (`dc_r24_t4_test_agreement.py`)
+A competitor says other teams get 0.99 on Task 4. Kaggle shows only the combined score, so a per-task test number is either a validation score or a decomposition of the total.
+* Our validation: out-of-fold macro-F1 0.9886 (seven members, 31,546 images), i.e. 0.99.
+* Test, label-free: the seven members disagree pairwise on 9.4% of test images (4.9-10.8%) vs 1.0-1.6% out of fold; all seven agree on 79.8% (OOF 97.0%); ensemble mean max-probability 0.791 (OOF 0.889). Since disagreement(A, B) <= err(A) + err(B), the average member errs on >= ~4.7% of test images.
+* Own uploads: v14 -> v15 changed 919 Task 4 labels and nothing else (T1/T2/T3/T5 0 rows), +0.00159 total = +0.0080 on Task 4. Every changed row is an error in v14 or in v15, so err(v14) + err(v15) >= 919; with err(v14) − err(v15) ≈ 207 (accuracy scale) this gives v15 Task 4 <= ~0.986 even if no change was wrong-to-wrong.
+* LB arithmetic (round 18): T4 + T5 ≈ 1.85; T5 ≈ 0.98 (the same label-free pipeline scored 0.983 against the confirmed answer of the first release) -> T4 ≈ 0.87, matching ATC / DoC / AGL 0.87-0.91 (round 11).
+* No preprocessing bug: every train and test image is 230 x 120 RGB (headers read), same loader.
+* The competitor confirmed the 0.99 is a validation score, the same as our 0.9886: no information about the test images, and no change. The test estimate for Task 4 stays ~0.87 (0.87-0.91 label-free).

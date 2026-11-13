@@ -37,6 +37,11 @@ RECIPES = {   # name -> (timm model, HxW, extra train_fold kwargs)
     # ViTs with a small learning rate and layer-wise decay (round 19; eva02_s above used ConvNeXt's 2e-4 and no decay)
     "eva02_s_ld": ("eva02_small_patch14_336.mim_in22k_ft_in1k", (168, 336), {"lr": 5e-5, "layer_decay": 0.75}),
     "clip_b16_ld": ("vit_base_patch16_clip_224.openai", (160, 320), {"lr": 3e-5, "layer_decay": 0.65}),
+    # round 22: does heavy occlusion (GridMask), or a vision-language backbone, hold up better on unseen content?
+    "cnxt_hud": ("convnext_tiny.in12k_ft_in1k", (160, 320), {"aug_kw": {"p_hud": 0.5}}),
+    "cnxt_grid": ("convnext_tiny.in12k_ft_in1k", (160, 320), {"aug_kw": {"p_hud": 0.5, "p_grid": 0.2}}),
+    "siglip2_ld": ("vit_base_patch16_siglip_224.v2_webli", (160, 320),
+                   {"lr": 2e-5, "layer_decay": 0.75, "grad_ckpt": True, "aug_kw": {"p_hud": 0.5}}),
 }
 
 

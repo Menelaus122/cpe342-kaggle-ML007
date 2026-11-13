@@ -36,8 +36,13 @@ def main():
                     help="zoom range of the affine augmentation (default 0.85 1.15)")
     ap.add_argument("--p-hud", type=float, default=0.0,
                     help="HUD dropout probability (round 19): hide the bottom strip / top + corners / all borders, or zoom into the centre")
+    ap.add_argument("--p-grid", type=float, default=0.0, help="heavy occlusion probability (round 22: GridMask / one block hiding 65-85%%)")
+    ap.add_argument("--layer-decay", type=float, default=None, help="layer-wise lr decay for ViTs (e.g. 0.75)")
+    ap.add_argument("--grad-ckpt", action="store_true",
+                    help="gradient checkpointing: same training, less GPU memory (ConvNeXt-Small at batch 64 on an 8 GB GPU)")
     args = ap.parse_args()
-    aug_kw = {**({"scale": tuple(args.aug_scale)} if args.aug_scale else {}), **({"p_hud": args.p_hud} if args.p_hud else {})} or None
+    aug_kw = {**({"scale": tuple(args.aug_scale)} if args.aug_scale else {}), **({"p_hud": args.p_hud} if args.p_hud else {}),
+              **({"p_grid": args.p_grid} if args.p_grid else {})} or None
 
     log_dir = OUT / "logs"
     log_dir.mkdir(exist_ok=True)
@@ -64,7 +69,8 @@ def main():
         log(f"full refit on all {len(y)} training images (same recipe, no hold-out)")
         model, hist = task4.train_fold(args.model, arr, y, np.arange(len(y)), [], img_size=size, epochs=args.epochs,
                                        bs=args.bs, lr=args.lr, seed=SEED + 100, log=log,
-                                       ckpt_path=MODEL_DIR / f"t4_{args.tag}_full.pt", aug_kw=aug_kw)
+                                       ckpt_path=MODEL_DIR / f"t4_{args.tag}_full.pt", aug_kw=aug_kw, grad_ckpt=args.grad_ckpt,
+                                       layer_decay=args.layer_decay)
         tp = task4.predict_paths(model, test.path.values, size, tta=True)
         np.savez_compressed(out_path, test_probs=tp, test_file_name=np.array(test.file_name.tolist(), dtype="U"))
         (log_dir / f"t4_{args.tag}_full_history.json").write_text(json.dumps(hist, indent=1))
@@ -79,7 +85,8 @@ def main():
         log(f"fold {f}: train {len(tr)} val {len(va)}")
         model, hist = task4.train_fold(args.model, arr, y, tr, va, img_size=size, epochs=args.epochs, bs=args.bs,
                                        lr=args.lr, seed=SEED + f, log=log,
-                                       ckpt_path=MODEL_DIR / f"t4_{args.tag}_fold{f}.pt", aug_kw=aug_kw)
+                                       ckpt_path=MODEL_DIR / f"t4_{args.tag}_fold{f}.pt", aug_kw=aug_kw, grad_ckpt=args.grad_ckpt,
+                                       layer_decay=args.layer_decay)
         vp = task4.predict_array(model, arr[va], size, tta=True)
         tp = task4.predict_paths(model, test.path.values, size, tta=True)
         np.savez_compressed(out_path, val_idx=va, val_probs=vp, test_probs=tp,
