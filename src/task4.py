@@ -246,8 +246,8 @@ NATIVE_NORM = {"vit_base_patch16_siglip_224.v2_webli", "vit_base_patch16_siglip_
 def create_model(name, num_classes=5, pretrained=True, drop_path=0.1, img_size=None):
     import timm
     kw = {}
-    if img_size is not None and name.split("_")[0] in ("vit", "deit3", "deit", "eva02"):
-        kw["img_size"] = tuple(img_size)        # ViTs: resample position embeddings to the 2:1 token grid
+    if img_size is not None and name.split("_")[0] in ("vit", "deit3", "deit", "eva02", "swin", "swinv2"):
+        kw["img_size"] = tuple(img_size)        # ViTs: resample position embeddings to the 2:1 token grid (Swin: window grid)
     model = timm.create_model(name, pretrained=pretrained, num_classes=num_classes, drop_path_rate=drop_path, **kw)
     if name in NATIVE_NORM:
         cfg = model.pretrained_cfg

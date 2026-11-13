@@ -1178,3 +1178,32 @@ alpha = 0.75 is the best exponent if the test set has about 20% 7-Eleven Knights
 GridMask buys robustness only to grid occlusion and pays on every natural view. SigLIP 2 at 160 x 320 with this recipe underfits (0.936 alone, 5 points below the CNNs) and is the least sure on the test frames the ensemble is unsure about (agrees with it on 49% of them). No SigLIP folds 1-4; the queue went on to the held-out-cluster runs.
 
 **Round 25, Task 4: member combination under the balanced-prior rule** (`dj_r25_t4_rule_variants.py`, balanced-mix macro-F1, mean of full / zoom70 / centre-grey): mean of probabilities x pi^-alpha (v17) 0.9733 / **0.9741** / 0.9740 at alpha 0.5 / 0.75 / 1; mean of log-probabilities 0.9729 / 0.9737 / 0.9741; each member adjusted and renormalised first 0.9730 / 0.9737 / 0.9742. A plateau of ±0.0005 from alpha 0.75 to 1; the v17 rule stays.
+
+**Round 25, Task 3 new members, final** (`di_r25_t3_members.py`, nested blend, pipeline 0.79458): + DART +0.00000 (blend weight 0.000); + Langevin CatBoost −0.00001 [−0.00005, +0.00002], 2/5 (weight 0.099); + peer-ratio features −0.00002, 0/5 (weight 0.071). None kept.
+
+## Round 26 (2026-11-13): v17 = 0.85507 (top 0.85787); class-prior checks on Tasks 1, 2, 4 (`dk_r26_prior_shift.py`), Swin, Task 3 blend space
+**Is there a prior shift in Tasks 1 and 2, as in Task 4? No.** Label-free diagnostics (EM = Saerens et al. 2002; its error on held-out folds in brackets):
+
+| | training shares | mean probability, OOF | mean probability, test | EM estimate of the test shares |
+|---|---|---|---|---|
+| Task 1 cheater | 0.3493 | 0.3494 | 0.3485 | 0.3477 (±0.004) |
+| Task 2 Casual / Grinder / Social / Whale | 0.394 / 0.250 / 0.202 / 0.154 | 0.394 / 0.250 / 0.202 / 0.154 | 0.396 / 0.251 / 0.200 / 0.153 | 0.397 / 0.252 / 0.198 / 0.153 (±0.005) |
+| Task 4 (five classes) | 0.394 / 0.140 / 0.177 / 0.188 / 0.101 | 0.376 / 0.145 / 0.180 / 0.190 / 0.110 | 0.183 / 0.229 / 0.159 / 0.257 / 0.172 | calibrated 0.153 / 0.261 / 0.143 / 0.261 / 0.182 (±0.003 in-distribution, 0.04 on HUD-hidden frames); raw 0.083 / 0.290 / 0.122 / 0.282 / 0.223 (±0.025) |
+
+* Tasks 1 and 2: the test sets have the training class mix to within the estimators' error. Task 2 at a balanced 25% mix would gain from prior adjustment (argmax 0.7485, nested multipliers 0.7511, p·π^−0.75 or π^−1 0.7568), but at the mix the test set actually has, the same rules lose (0.7564 -> 0.7550 / 0.7517). The pipeline's multipliers are already the class-weighting for the real mix. No change. (Whale is 15.4% of this year's data, not the 5% of the slide.)
+* Task 4: the shift is specific to the images. EM is run as a diagnostic only and is not used: it assumes the frames of each class look the same in train and test, which is false here, and its answer depends on calibration (7-Eleven 8% raw vs 15% calibrated).
+
+**Task 4 exponent** (seven members, OOF; uniform mix = rows weighted 0.2 / π):
+
+| alpha | training mix: full / zoom70 / HUD hidden | uniform mix: full / zoom70 / HUD hidden (mean) | predicted test shares |
+|---|---|---|---|
+| 0 | 0.9886 / 0.9715 / 0.9608 | 0.9872 / 0.9689 / 0.9562 (0.9708) | 0.170 / 0.250 / 0.151 / 0.253 / 0.175 |
+| 0.5 | 0.9879 / 0.9705 / 0.9618 | 0.9881 / 0.9708 / 0.9610 (0.9733) | 0.155 / 0.258 / 0.151 / 0.249 / 0.187 |
+| 0.75 (v17) | 0.9873 / 0.9694 / 0.9610 | 0.9885 / 0.9714 / 0.9623 (**0.9741**) | 0.148 / 0.261 / 0.150 / 0.248 / 0.193 |
+| 0.85 | 0.9871 / 0.9688 / 0.9601 | 0.9886 / 0.9716 / 0.9623 (**0.9741**) | 0.145 / 0.262 / 0.150 / 0.247 / 0.195 |
+| 1.0 | 0.9866 / 0.9675 / 0.9586 | 0.9884 / 0.9713 / 0.9623 (0.9740) | 0.142 / 0.263 / 0.150 / 0.246 / 0.199 |
+| 1.15 | 0.9860 / 0.9658 / 0.9565 | 0.9882 / 0.9710 / 0.9617 (0.9737) | 0.139 / 0.264 / 0.150 / 0.245 / 0.202 |
+
+alpha = 1 is the Bayes exponent only for calibrated posteriors. The ensemble is under-confident (label smoothing, Mixup/CutMix: temperature 0.46 on OOF), so its calibrated posterior is p^(1/T) and dividing that by π equals argmax p·π^−T: the exact exponent for in-distribution frames is about 0.46, and frames that are ambiguous for other reasons push the optimum up. On the uniform simulation 0.75-1.0 is a plateau (0.9741 / 0.9741 / 0.9740) and 1.15 is past it. No training-only evidence prefers 1.0 over 0.75; alpha stays 0.75 and is not tuned on the leaderboard.
+
+**Round 26, Task 3: the space predictions are combined in** (`dl_r26_t3_blendspace.py`, nested, pipeline 0.79458 = seeds averaged in log space, members L1-blended in THB). Seeds averaged in THB instead: +0.00001 [+0.00000, +0.00001], 4/5 folds (seed-to-seed SD of mu is small, so the arithmetic and geometric means nearly coincide). Members combined as a weighted geometric mean −0.00002; weighted median −0.00007 (0/5); unweighted mean −0.00104, median −0.00056, geometric mean −0.00117. The fitted L1 blend in THB is the right combination; the +0.00001 is two millionths of the leaderboard score and is not worth a pipeline change on its own.

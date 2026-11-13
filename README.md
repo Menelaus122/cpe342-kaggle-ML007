@@ -184,6 +184,7 @@ Task 3's 10-seed bag adds `t3r_hurdle[_full]_s<seed>.npz` and `t3r_ratio_*[_full
 | `versions/v14_LB0.84873/` | 0.84873 | first upload on the re-released data: uploaded file + full pipeline state (code, notebooks, cached predictions incl. the re-ordered Task 4 caches and the new Task 2 caches) |
 | `versions/v15_LB0.85032/` | 0.85032 | v14 + Task 4 six-backbone ensemble (four HUD-dropout backbones, round 19), plain argmax: uploaded file + full pipeline state incl. the HUD-dropout caches |
 | `versions/v16_LB0.85035/` | 0.85035 | v15 + ConvNeXt-Small HUD backbone as the seventh Task 4 member (round 21): uploaded file + full pipeline state incl. its caches |
+| `versions/v17_LB0.85507/` | 0.85507 | v16 + balanced-prior decision rule for Task 4 (argmax p·π^−0.75): uploaded file + full pipeline state |
 | `versions/pre_t3_merge_backup_2026-11-08/` | not uploaded | notebooks, submission parts and `submission.csv` just before Task 3 v8 was merged into the pipeline |
 
 
