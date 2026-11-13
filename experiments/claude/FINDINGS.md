@@ -1237,3 +1237,49 @@ Adding it: objective +0.0001 [−0.0009, +0.0011] with argmax, full frames −0.
 LR + LightGBM + CatBoost is the only variant that is positive on every split with 4/5 folds each: it passes the round 25 rule (it would not have passed the old CI gate on three of the four splits, and it is the best of eight variants, so the +0.0004 is an optimistic estimate). Fitted as the pipeline would (cut-off on the full OOF: F2 0.8383 -> 0.8387, cut 0.150 -> 0.162), it changes 0.66% of OOF labels and 0.53% of test labels (136 rows: 23 newly flagged, 113 released), so the tree meta-models behave on the averaged test logits as they do out of fold. Expected effect: +0.0004 on Task 1 = about +0.00008 on the leaderboard average.
 
 **v18 built (not uploaded).** The stacker is in the pipeline (`scripts/nb_part2.py` 7.1 and the final refit; caches `t1_l2_trees`, `t1_l2_trees_full`). Master notebook: OOF F2 0.8383 -> 0.8387, cut 0.150 -> 0.162. `submission_v18.csv` differs from v17 in 136 `task1` rows (23 newly flagged, 113 released; flag rate 60.60% -> 60.26%) and in nothing else, exactly as `do_r26_t1_l2_final.py` predicted.
+
+## Round 27 (2026-11-14): v18 = 0.85515; re-tests under the round 25 rule and the overnight queue (`dp_` to `dv_r27_*.py`)
+Brief: four items already measured as positive in earlier rounds but not in the pipeline, then an overnight queue (10-seed bags for Tasks 1 and 2, two new kinds of Task 4 member). Acceptance: mean nested gain > 0 and better in >= 4/5 folds; CIs reported, not used as a gate.
+
+**Task 4: class bias on HUD-poor frames** (`ds_r27_t4_occluded_bias.py`). Under the v17 rule the predicted test shares are 0.148 / 0.261 / 0.150 / 0.248 / 0.193; the question was whether FiveN and PUBE Mobile are over-predicted when the HUD is missing. On training images with every class weighted to 20%:
+
+| view | share of predictions (7-Eleven / FiveN / Free Fried / PUBE / Roblock) | precision | recall |
+|---|---|---|---|
+| full | 0.201 / 0.199 / 0.200 / 0.199 / 0.200 | 0.985 / 0.990 / 0.993 / 0.990 / 0.985 | 0.992 / 0.986 / 0.991 / 0.988 / 0.986 |
+| 70% zoom | 0.204 / 0.197 / 0.199 / 0.199 / 0.201 | 0.961 / 0.979 / 0.977 / 0.974 / 0.967 | 0.981 / 0.965 / 0.972 / 0.967 / 0.972 |
+| HUD hidden | 0.206 / 0.197 / 0.198 / 0.199 / 0.199 | 0.950 / 0.974 / 0.966 / 0.956 / 0.966 | 0.980 / 0.960 / 0.959 / 0.952 / 0.961 |
+
+No class is over-predicted by more than 0.6 points, and the one that is slightly over-predicted is still 7-Eleven Knights (precision below recall), not FiveN or PUBE. The correction (pbar / 0.2)^−beta, with pbar = balanced mean probability on the HUD-poor views of the training folds, selects beta = 0 in every fold (+0.0000); free class multipliers fitted on those views −0.0000 [−0.0004, +0.0003], 3/5, and −0.0008 at the training mix. So the 26% / 25% predicted for FiveN / PUBE on test is not a bias that training images reproduce; the simpler reading is that the test set contains more of those two games (the EM diagnostic of round 26 says the same). No change.
+
+**Task 4: frozen-feature probe where the ensemble is unsure** (`dq_r27_t4_probe_views.py`, `dr_r27_t4_probe_fusion.py`). Frozen CLIP + DINOv2 + SigLIP 2 features (2,304 numbers) of every training image under the full, 70%-zoom and HUD-hidden views; logistic probe per pipeline fold. Balanced macro-F1 under the v17 rule:
+
+| | full | zoom70 | HUD hidden | mean |
+|---|---|---|---|---|
+| seven fine-tuned members | 0.9885 | 0.9714 | 0.9623 | 0.9741 |
+| probe fitted on full frames (round 11's probe) | 0.9300 | 0.8283 | 0.5869 | 0.7817 |
+| probe fitted on the three views | 0.9240 | 0.8917 | 0.8596 | 0.8918 |
+
+* The probe is not better where the ensemble is unsure: on rows with ensemble max-probability < 0.5 its accuracy is 0.40-0.45 against the ensemble's 0.48-0.56, on every view. The premise (web-scale features hold up where fine-tuned ones fail) does not hold on simulated HUD loss.
+* Fusion mix = ens if max(ens) >= tau else (1 − lam) ens + lam probe, (tau, lam) nested. Full-frame probe: −0.0003, 1/5. Three-view probe: **+0.0005 [+0.0000, +0.0009], 4/5 folds** (full +0.0004, zoom70 +0.0006, HUD hidden +0.0004; +0.0004 at the training mix); every fold picks lam = 0.1, and tau = 0.85 or "always" give the same score, so the gate does nothing: it is simply a tenth member at 10% weight.
+* Where the gain comes from (0.9 ens + 0.1 probe, all 31,546 images): net +15 / +13 / +8 correct labels on full / zoom70 / HUD hidden, almost all from rows with ensemble confidence 0.5-0.7; below 0.5 it changes 28 / 70 / 126 labels for a net +2 / +6 / −2. Test frames sit in the low-confidence bins far more often than training frames, so on test this will change many labels for a small expected net gain.
+* Passes the rule, so it goes into the pipeline as a member with fixed weight 0.10, no gate (`scripts/train_task4_probe.py`, caches `t4_probe_fold*.npz`, `t4_probe_full.npz`).
+
+**Round 27, interrupted runs (2026-11-14 04:05).** Six jobs were running at once (Task 2 10-seed bag, Task 1 bag test, Task 1 member test, Task 2 KDE splits, the probe fit, the fold-0 GPU run) and the machine ran out of memory; all six were stopped. Nothing is corrupted (every script resumes from its caches). Partial results, to be completed one job at a time:
+
+* **Task 2, stack blended with the KDE naive Bayes** (`dp_r27_t2_kde_blend.py`; strict version: the density grid spans the fitted rows only, 99.98% of OOF labels identical to round 21's; `task2.kde_nb_cv` reproduces it exactly). Pipeline folds only so far, stack + nested multipliers 0.7564:
+
+  | level 2 | nested macro-F1 | delta [95% CI] | folds |
+  |---|---|---|---|
+  | 0.5 stack + 0.5 KDE NB | 0.7576 | +0.0011 [+0.0002, +0.0021] | 5/5 |
+  | 0.7 stack + 0.3 KDE NB | 0.7569 | +0.0005 [−0.0003, +0.0013] | 4/5 |
+  | weight chosen nested (picks 0.3-0.4 for the stack) | 0.7576 | +0.0012 [+0.0001, +0.0022] | 4/5 |
+  | geometric 0.5 / 0.5 | 0.7574 | +0.0009 [−0.0000, +0.0019] | 4/5 |
+  | KDE NB as a fifth LogReg-stack member | 0.7564 | −0.0001 [−0.0008, +0.0007] | 2/5 |
+
+  Passes on the pipeline folds; the three other stacker splits were not reached.
+* **Task 1, extra members under the v18 level 2** (`dt_r27_t1_members.py`), two of four splits: + XGBoost tuned −0.0001 / −0.0001 (2/5, 1/5); + LightGBM reduced −0.0006 / +0.0000 (1/5, 2/5); + both +0.0001 / +0.0002 (1/5, 4/5); + XGBoost tuned + three reduced members +0.0001 / −0.0002 (2/5, 1/5). Nothing passes so far.
+* **Task 1, 10-seed bag under the v18 level 2** (`dv_r27_t1_bag_l2.py`): no split finished.
+* **Task 2, 10 seeds of LightGBM / XGBoost / CatBoost on the re-released data** (`BAG_DIR=r27_bag by_r14_bag.py cv t2`): only LightGBM seed 42 finished (identical to the pipeline cache, max difference 0). About 7 hours of CPU remain (CatBoost: about 36 minutes per seed).
+* **Task 4 probe member** (`scripts/train_task4_probe.py`): folds 0-3 fitted (full-frame accuracy 0.931-0.933), fold 4 and the full fit missing.
+* **Task 4, colour-robust ConvNeXt-Tiny** (192x384, greyscale 0.3, colour jitter p 0.8 with 1.6x ranges, HUD dropout 0.6; new options `--p-gray`, `--p-jitter`, `--jitter-gain` in `scripts/train_task4.py`), fold 0: stopped after epoch 2 of 10 (validation macro-F1 0.9474; about 225 s per epoch). DINOv2-B fine-tuning (196x392, lr 1.5e-5, layer decay 0.65) not started.
+* **Task 3, seeds averaged in THB**: implemented in `scripts/nb_part2.py` (7.3 and the final refit); notebooks not rebuilt yet.

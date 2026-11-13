@@ -84,7 +84,7 @@ class GPUAugment:
     def __init__(self, p_affine=0.6, max_rot=25, scale=(0.85, 1.15), max_shift=0.08, max_shear=8,
                  randaug_chunk=8, p_jitter=0.5, p_invert=0.15, p_gray=0.05, p_noise=0.4,
                  max_noise=0.10, p_blur=0.2, p_erase=0.2, p_hud=0.0, hud_zoom=(0.60, 0.75),
-                 p_grid=0.0, grid_cover=(0.65, 0.85)):
+                 p_grid=0.0, grid_cover=(0.65, 0.85), jitter_gain=1.0):
         self.__dict__.update(locals())
         del self.__dict__["self"]
         self.randaug = v2.RandAugment(num_ops=2, magnitude=9)
@@ -126,11 +126,12 @@ class GPUAugment:
         B, dev = x.shape[0], x.device
         on = self._bern(self.p_jitter, B, dev)[:, None, None, None]
         r = lambda lo, hi: (lo + torch.rand(B, device=dev) * (hi - lo))[:, None, None, None]
-        y = x * r(0.7, 1.3)                                                     # brightness
+        g = self.jitter_gain                                                    # 1 = the original ranges (round 27: 1.6 = strong jitter)
+        y = x * r(1 - 0.3 * g, 1 + 0.3 * g)                                     # brightness
         gray = (0.299 * y[:, 0] + 0.587 * y[:, 1] + 0.114 * y[:, 2]).unsqueeze(1)
-        y = (y - gray.mean((2, 3), keepdim=True)) * r(0.7, 1.3) + gray.mean((2, 3), keepdim=True)  # contrast
+        y = (y - gray.mean((2, 3), keepdim=True)) * r(1 - 0.3 * g, 1 + 0.3 * g) + gray.mean((2, 3), keepdim=True)  # contrast
         gray = (0.299 * y[:, 0] + 0.587 * y[:, 1] + 0.114 * y[:, 2]).unsqueeze(1)
-        y = gray + (y - gray) * r(0.6, 1.4)                                     # saturation
+        y = gray + (y - gray) * r(1 - 0.4 * g, 1 + 0.4 * g)                     # saturation
         # hue: rotate the chroma plane in YIQ space by a per-sample angle in [-pi, pi]
         T = torch.tensor([[0.299, 0.587, 0.114], [0.596, -0.274, -0.322], [0.211, -0.523, 0.312]], device=dev)
         Ti = torch.linalg.inv(T)

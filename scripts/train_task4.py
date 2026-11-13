@@ -37,12 +37,18 @@ def main():
     ap.add_argument("--p-hud", type=float, default=0.0,
                     help="HUD dropout probability (round 19): hide the bottom strip / top + corners / all borders, or zoom into the centre")
     ap.add_argument("--p-grid", type=float, default=0.0, help="heavy occlusion probability (round 22: GridMask / one block hiding 65-85%%)")
+    ap.add_argument("--p-gray", type=float, default=None, help="random greyscale probability (default 0.05; round 27: 0.3)")
+    ap.add_argument("--p-jitter", type=float, default=None, help="colour jitter probability (default 0.5)")
+    ap.add_argument("--jitter-gain", type=float, default=None,
+                    help="widens the brightness / contrast / saturation ranges of the colour jitter (default 1.0; round 27: 1.6)")
     ap.add_argument("--layer-decay", type=float, default=None, help="layer-wise lr decay for ViTs (e.g. 0.75)")
     ap.add_argument("--grad-ckpt", action="store_true",
                     help="gradient checkpointing: same training, less GPU memory (ConvNeXt-Small at batch 64 on an 8 GB GPU)")
     args = ap.parse_args()
     aug_kw = {**({"scale": tuple(args.aug_scale)} if args.aug_scale else {}), **({"p_hud": args.p_hud} if args.p_hud else {}),
-              **({"p_grid": args.p_grid} if args.p_grid else {})} or None
+              **({"p_grid": args.p_grid} if args.p_grid else {}), **({"p_gray": args.p_gray} if args.p_gray is not None else {}),
+              **({"p_jitter": args.p_jitter} if args.p_jitter is not None else {}),
+              **({"jitter_gain": args.jitter_gain} if args.jitter_gain is not None else {})} or None
 
     log_dir = OUT / "logs"
     log_dir.mkdir(exist_ok=True)

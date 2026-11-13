@@ -453,7 +453,7 @@ The level-1 pool mixes *median* estimators (the right target for absolute error)
   * Spending is multiplicative: $y \approx b \times \text{segment factor} \times \text{noise}$. The within-segment spread (MAD) of $\log(y/b)$ is 0.205, versus 0.44–0.53 for $\log y$ itself, so the ratio target is much easier to learn.
   * Ratio stage 2 is fitted with LightGBM (Optuna-tuned for L1, and default parameters), XGBoost and CatBoost.
   * Rows without a usable base keep the plain hurdle's $\mu$.
-  * **10-seed bagging.** Both hurdle stages and the four ratio stage-2 models that carry the blend weight are trained with 10 seeds (same features, hyper-parameters and folds; only the model seed changes) and averaged: $p$ as a probability, $\mu$ on the log scale. Read-outs, blend weights, gate and scale are learned on the bagged out-of-fold predictions. Nested out-of-fold gain +0.00024 NMAE, 95% CI [+0.00011, +0.00037], 5/5 folds better. The two ratio members with almost no blend weight keep a single seed (and the single-seed hurdle's $\mu$ as their fallback).
+  * **10-seed bagging.** Both hurdle stages and the four ratio stage-2 models that carry the blend weight are trained with 10 seeds (same features, hyper-parameters and folds; only the model seed changes) and averaged: $p$ as a probability; each seed's $\mu$ is read out to THB and the read-outs are averaged (arithmetic mean in the space the members are blended and scored in; averaging $\mu$ on the log scale first would be a geometric mean; nested +0.00001, 4/5 folds, round 26). Read-out parameters are tuned on the seed-mean $\mu$; blend weights, gate and scale are learned on the bagged out-of-fold predictions. Nested out-of-fold gain +0.00024 NMAE, 95% CI [+0.00011, +0.00037], 5/5 folds better. The two ratio members with almost no blend weight keep a single seed (and the single-seed hurdle's $\mu$ as their fallback).
 
   Each stage 2 is combined with $p$ three ways:
   * **Mixture median** (MAE-optimal under a log-normal positive part): $\hat y = 0$ if $p\le 0.5$, else $\exp\!\big(\mu+\sigma\,\Phi^{-1}(1-\tfrac{0.5}{p})\big)-1$. The scale $\sigma$ and a gate shift are tuned on OOF NMAE.
@@ -499,22 +499,29 @@ RATIO3 = {"ratio[hist] LGB tuned": ("lgb", R2_3, "historical_spending"),
           "ratio[hist] XGB": ("xgb", {"learning_rate": 0.05}, "historical_spending"),
           "ratio[hist] Cat": ("cat", {"learning_rate": 0.08, "depth": 8}, "historical_spending")}
 slug3 = lambda tag: "t3r_" + tag.replace("[", "_").replace("] ", "_").replace(" ", "_").lower()
-mu3 = {"Hurdle": (h["mu_oof"], h["mu_test"])}
-ratio3 = {}
+mu3 = {"Hurdle": (h["mu_oof"], h["mu_test"])}        # seed-mean of mu (log scale): tunes the read-outs, table below
+mus3 = {"Hurdle": [(hs[s]["mu_oof"], hs[s]["mu_test"]) for s in SEEDS3]}   # per-seed mu: what the read-outs are applied to
+ratio3, ratio3_runs = {}, {}
 for tag, (kind, prm, bcol) in RATIO3.items():
     if tag in BAG3:   # each seed's ratio model falls back to the same seed's hurdle mu
-        ratio3[tag] = bag_mean([cached(slug3(tag) + sfx3(s), lambda s=s: task3.ratio_stage2_cv(kind, {**prm, **seed_kw3(kind, s)}, X3, y3, X3_test, folds3, bcol,
-                                                                                                hs[s]["mu_oof"], hs[s]["mu_test"])) for s in SEEDS3],
-                               ("mu_oof", "mu_test", "test"))
+        ratio3_runs[tag] = [cached(slug3(tag) + sfx3(s), lambda s=s: task3.ratio_stage2_cv(kind, {**prm, **seed_kw3(kind, s)}, X3, y3, X3_test, folds3, bcol,
+                                                                                            hs[s]["mu_oof"], hs[s]["mu_test"])) for s in SEEDS3]
+        ratio3[tag] = bag_mean(ratio3_runs[tag], ("mu_oof", "mu_test", "test"))
     else:
         ratio3[tag] = cached(slug3(tag), lambda: task3.ratio_stage2_cv(kind, prm, X3, y3, X3_test, folds3, bcol, hs[42]["mu_oof"], hs[42]["mu_test"]))
+        ratio3_runs[tag] = [ratio3[tag]]
     mu3[tag] = (ratio3[tag]["mu_oof"], ratio3[tag]["mu_test"])
+    mus3[tag] = [(r_["mu_oof"], r_["mu_test"]) for r_ in ratio3_runs[tag]]
+# Seeds are combined in THB (round 26/27, experiments/claude/dl_r26_t3_blendspace.py): each seed's mu is read out to THB and the
+# read-outs are averaged, instead of averaging mu on the log scale first (a geometric mean of the seeds). The members are blended
+# and scored in THB, so the arithmetic mean is the consistent choice; nested NMAE score +0.00001, better in 4/5 folds.
+seed_readout = lambda kind, p, mus, ro_: np.mean([task3.apply_readout(kind, p, mu_s, ro_) for mu_s in mus], axis=0)
 RO3 = {}
 for tag, (mu, mu_t) in mu3.items():
     RO3[tag] = task3.readouts(y3, h["p_oof"], mu)
     for ro_kind in ("mixture-median", "hard gate", "E[y] + smearing"):
-        m3[f"{tag} {ro_kind}"] = (task3.apply_readout(ro_kind, h["p_oof"], mu, RO3[tag]),
-                                  task3.apply_readout(ro_kind, h["p_test"], mu_t, RO3[tag]))
+        m3[f"{tag} {ro_kind}"] = (seed_readout(ro_kind, h["p_oof"], [a for a, _ in mus3[tag]], RO3[tag]),
+                                  seed_readout(ro_kind, h["p_test"], [b for _, b in mus3[tag]], RO3[tag]))
 ro = RO3["Hurdle"]
 print(f"hurdle: tuned sigma {ro['sigma']:.3f}, gate shift {ro['shift']:+.3f}; hard-gate tau={ro['tau']:.3f}; smearing factor={ro['smear']:.3f}")
 print(f"stage-1 AUC P(y>0): {roc_auc_score(y3 > 0, h['p_oof']):.4f}")
@@ -611,6 +618,24 @@ oof4 = np.mean([oof_tag[t] for t in T4_TAGS], axis=0)
 test4 = np.mean([test_tag[t] for t in T4_TAGS], axis=0)
 if len(T4_TAGS) > 1:
     pf.loc["probability average"] = [np.nan] * N_FOLDS + [macro_f1(y4, oof4.argmax(1))]
+# Frozen-feature probe (round 27, scripts/train_task4_probe.py): logistic regression on frozen CLIP + DINOv2 + SigLIP 2 features,
+# fitted on the full frame, the 70% zoom and the HUD-hidden view of every training image. Much weaker alone, but it does not share
+# the fine-tuned members' errors: at 10% weight the balanced macro-F1 (mean of full / zoom / HUD-hidden frames, alpha 0.75) rises by
+# +0.0005, better in 4/5 folds, with the weight chosen nested (experiments/claude/dr_r27_t4_probe_fusion.py).
+PROBE_W4 = 0.10
+HAS_PROBE4 = all((C.PRED_DIR / f"t4_probe_fold{f}.npz").exists() for f in range(N_FOLDS))
+if HAS_PROBE4:
+    oof_probe, test_probe, pfp = np.zeros((len(y4), 5)), np.zeros((len(t4_test), 5)), []
+    for f in range(N_FOLDS):
+        z = np.load(C.PRED_DIR / f"t4_probe_fold{f}.npz")
+        check_t4_order(z, f"t4_probe_fold{f}")
+        assert (z["val_idx"] == np.load(C.PRED_DIR / f"t4_{T4_TAGS[0]}_fold{f}.npz")["val_idx"]).all()
+        oof_probe[z["val_idx"]] = z["val_probs"]
+        test_probe += z["test_probs"] / N_FOLDS
+        pfp.append(f1_score(y4[z["val_idx"]], z["val_probs"].argmax(1), average="macro"))
+    pf.loc["frozen-feature probe"] = pfp + [macro_f1(y4, oof_probe.argmax(1))]
+    oof4, test4 = (1 - PROBE_W4) * oof4 + PROBE_W4 * oof_probe, (1 - PROBE_W4) * test4 + PROBE_W4 * test_probe
+    pf.loc[f"probability average + {PROBE_W4:.0%} probe"] = [np.nan] * N_FOLDS + [macro_f1(y4, oof4.argmax(1))]
 display(pf.round(4))
 W4, SCORE4 = optimize_class_weights(y4, oof4)
 base4 = macro_f1(y4, oof4.argmax(1))
@@ -650,7 +675,7 @@ for i, v in enumerate(pc4[::-1]):
     axes[1].text(v, i, f" {v:.4f}", va="center", fontsize=8.5)
 axes[1].set_xlim(0.9, 1.0); axes[1].set_title("Per-class F1 (OOF)")
 plt.tight_layout(); savefig(fig, "t4_confusion"); plt.show()
-summary.append(["Task 4", "macro-F1", SCORE4, f"{' + '.join(T4_TAGS)} 5-fold, GPU aug + Mixup/CutMix, EMA, h-flip TTA, balanced-prior rule (alpha 0.75)"])
+summary.append(["Task 4", "macro-F1", SCORE4, f"{' + '.join(T4_TAGS)} 5-fold, GPU aug + Mixup/CutMix, EMA, h-flip TTA{' + 10% frozen-feature probe' if HAS_PROBE4 else ''}, balanced-prior rule (alpha 0.75)"])
 """)
 code(r"""
 # Distribution-shift diagnostics: held-out train images (OOF) vs test images
@@ -834,23 +859,27 @@ hf = bag_mean(hfs.values(), ("p_test", "mu_test"))   # blend_full is linear, so 
 full3 = {k: np.clip(v["test"], 0, None) for k, v in r.items()}
 full3["LGB-L1 log1p"] = np.clip(np.expm1(r["LGB-L1 log1p"]["test"]), 0, None)
 p_fin = blend_full(h["p_test"], hf["p_test"])
-mu_fin = {"Hurdle": blend_full(h["mu_test"], hf["mu_test"])}
+# per-seed final mu (fold models and full-data model of the same seed blended); read-outs are averaged over seeds in THB as in 7.3
+mu_fin = {"Hurdle": [blend_full(hs[s]["mu_test"], hfs[s]["mu_test"]) for s in SEEDS3]}
 mu_fin_42 = blend_full(hs[42]["mu_test"], hfs[42]["mu_test"])   # fallback of the single-seed ratio members
 for tag, (kind, prm, bcol) in RATIO3.items():
     if tag in BAG3:
-        rf = bag_mean([cached(slug3(tag) + "_full" + sfx3(s), lambda s=s: task3.ratio_stage2_full(kind, {**prm, **seed_kw3(kind, s)}, X3, y3, X3_test, folds3, bcol))
-                       for s in SEEDS3], ("test",))
+        rfs = [cached(slug3(tag) + "_full" + sfx3(s), lambda s=s: task3.ratio_stage2_full(kind, {**prm, **seed_kw3(kind, s)}, X3, y3, X3_test, folds3, bcol))
+               for s in SEEDS3]
     else:
-        rf = cached(slug3(tag) + "_full", lambda: task3.ratio_stage2_full(kind, prm, X3, y3, X3_test, folds3, bcol))
+        rfs = [cached(slug3(tag) + "_full", lambda: task3.ratio_stage2_full(kind, prm, X3, y3, X3_test, folds3, bcol))]
     bt3 = np.log1p(X3_test[bcol].values)
     ok3 = np.isfinite(bt3)
-    mu_fin[tag] = (mu_fin["Hurdle"] if tag in BAG3 else mu_fin_42).copy()
-    mu_fin[tag][ok3] = bt3[ok3] + blend_full(ratio3[tag]["test"], rf["test"])[ok3]
+    mu_fin[tag] = []
+    for i, (run_cv_, run_full_) in enumerate(zip(ratio3_runs[tag], rfs)):
+        mu_s = (mu_fin["Hurdle"][i] if tag in BAG3 else mu_fin_42).copy()
+        mu_s[ok3] = bt3[ok3] + blend_full(run_cv_["test"], run_full_["test"])[ok3]
+        mu_fin[tag].append(mu_s)
 P3t_final = []
 for k in names3:
     tag = next((t for t in mu_fin if k.startswith(t + " ")), None)
     if tag is not None:                                   # hurdle read-outs: recompute from the blended stage inputs
-        P3t_final.append(task3.apply_readout(k[len(tag) + 1:], p_fin, mu_fin[tag], RO3[tag]))
+        P3t_final.append(seed_readout(k[len(tag) + 1:], p_fin, mu_fin[tag], RO3[tag]))
     else:
         P3t_final.append(blend_full(m3[k][1], full3[k]))
 gate_test_final = (np.clip(p_fin + RO3["Hurdle"]["shift"], 0, 1) > 0.5).astype(float)
@@ -866,7 +895,12 @@ for tag in T4_TAGS:
         check_t4_order(np.load(pth), pth.stem)
     test4_final.append(blend_full(test_tag[tag], np.load(pth)["test_probs"]) if pth.exists() else test_tag[tag])
     print(f"Task 4 {tag}: full-data model {'included' if pth.exists() else 'NOT found -> 5-fold ensemble only'}")
-pred4_final = apply_class_weights(np.mean(test4_final, axis=0), W4)
+test4_final = np.mean(test4_final, axis=0)
+if HAS_PROBE4:
+    pth = C.PRED_DIR / "t4_probe_full.npz"
+    check_t4_order(np.load(pth), pth.stem)
+    test4_final = (1 - PROBE_W4) * test4_final + PROBE_W4 * blend_full(test_probe, np.load(pth)["test_probs"])
+pred4_final = apply_class_weights(test4_final, W4)
 changes.append(["Task 4", "labels changed", np.mean(pred4_final != pred4), ""])
 
 display(pd.DataFrame(changes, columns=["task", "check", "value", "note"]).set_index("task").round(4))
