@@ -358,6 +358,35 @@ md(r"""
 * **Out-of-range coordinates are not a rule on their own.** About two thirds belong to those teleporting accounts. The rest are players near the date line whose longitude wraps past ±180° with no actual travel. The geo signal is therefore the wrap-aware great-circle jump (haversine), not the coordinate range.
 
 So one anomaly signature is a **change relative to the account's own baseline**, which drives the feature engineering below. §5.3 shows a second kind that never changes: accounts that are abnormal in *every* period (single-IP clockwork bots, near-zero activity or chat, very low `behavior_stability`).
+
+## 3.6 Data-quality audit (all tasks)
+Before any modelling, `src/audit.py` checks every task on features only (no test label exists, and nothing here is fitted for a model):
+* **Distribution shift.** Adversarial validation: a LightGBM tries to tell train rows from test rows. Three views locate a shift: all features, only the missing-value indicators, and the values with missing cells filled by the train median. A per-column Kolmogorov–Smirnov statistic on the observed values completes it.
+* **Missing values: informative or random?** For every column, a chi-square (classes) or Mann–Whitney (spending) test of the target against "cell is missing". If no column is informative, the cells are missing completely at random, and imputing them or adding indicators cannot add signal.
+* **Impossible values.** Percentages outside [0, 100], coordinates off the globe, negative counts, sentinel codes, and spikes at a column's minimum or maximum.
+* **Duplicate rows, constant columns and collinear pairs** (|Spearman| > 0.98), plus a scan of all Task 4 images.
+""")
+code(r"""
+from src import audit
+aud = {"Task 1": audit.task_audit(t1_train, t1_test, "is_cheater"),
+       "Task 2": audit.task_audit(t2_train, t2_test, "segment"),
+       "Task 3": audit.task_audit(t3_train, t3_test, "spending_30d", regression=True),
+       "Task 5": audit.task_audit(None, t5_test)}
+with pd.option_context("display.max_colwidth", 120):
+    display(pd.DataFrame(aud).drop(index="physical issues").fillna("-"))
+for k, v in aud.items():
+    print(f"{k} physical checks: {v['physical issues']}")
+display(pd.DataFrame(audit.image_audit(task4.DATA, {"train": t4_train, "test": t4_test})).T.rename_axis("Task 4 images"))
+""")
+md(r"""
+**Audit findings.**
+* **Task 1:** train and test are easy to tell apart (AUC ≈ 0.90), but only through *which* cells are missing. The indicators alone give the same AUC, while the observed values barely move (largest KS ≈ 0.01). Test rows miss the key columns far less often (`account_age_days` 14.5% → 0.6%, `avg_session_length_min` 22.9% → 1.6%) and a few others more often (`headshot_percentage` 2.7% → 14.1%). Missingness is unrelated to the label, so LightGBM keeps its native NaN handling. Missing-value indicators, median imputation and masking-robust training were all tested: none was better on at least 4 of 5 folds with a bootstrap interval above zero (`experiments/claude/FINDINGS.md`, round 10). Because test rows are more complete, the test $F_2$ should be *higher* than the OOF estimate: re-scoring the OOF predictions under the test's missing-value pattern gives 0.847 for LightGBM vs 0.835.
+* **Tasks 2 and 3:** train and test are indistinguishable (AUC 0.50), with the same missing rates. There is nothing to correct.
+* **Missing values in Tasks 1–3:** no column is informative at p < 0.001. The cells are missing completely at random.
+* **Impossible values:** none need cleaning. No percentage leaves [0, 100]. Several bounded scores are clipped at their limits (e.g. 8% of `aiming_smoothness` = 1 in Task 1), which trees handle. `account_age_days = 999` in Tasks 2/3 is not a sentinel: neighbouring values are just as frequent.
+* **Task 5:** 207 accounts log in from coordinates past ±90° / ±180°. About two thirds are teleporting accounts; the rest are date-line wraps, handled by the wrap-aware haversine features (§3.5). `refund_count_2/3 = −1` in 16% of accounts is a floor value with the same anomaly rate as everyone else.
+* **Duplicates / collinearity:** no duplicate rows within or across splits and no constant columns. The only collinear pairs are known structure: historical vs previous-month spending (Task 3, ratio 0.30–0.40) and the per-period location and skill-rating series (Task 5).
+* **Task 4:** all 57,435 images are readable, all 230×120, with no duplicates within or across splits. 41 near-blank training frames (0.13%) are kept. Test images are darker on average (brightness 105 vs 115), part of the known test shift (§7.4).
 """)
 
 # ================================================================ 4. preparation

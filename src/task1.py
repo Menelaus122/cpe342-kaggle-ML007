@@ -61,3 +61,19 @@ def build(train, test):
     X = add_features(train, ref=Xtr_raw)
     X_test = add_features(test, ref=Xtr_raw)
     return X, train[TARGET].values, X_test
+
+
+# Round 11 (2026-11-11): extra stack members built the way last year's 1st-place team built theirs (CPE342 1/2025, public repo
+# github.com/Saltywan/CPE342-KAGGLE; idea re-implemented, no code copied). They use 24 of the 31 raw columns, leaving out
+# device_changes_count, input_consistency_score, avg_session_length_min, sessions_per_day, movement_pattern_score, map_knowledge and
+# clutch_success_rate, and fill missing cells with the training median. Different inputs make them diverse members for our stack.
+C24 = ["kill_death_ratio", "headshot_percentage", "win_rate", "accuracy_score", "kill_consistency", "reaction_time_ms", "account_age_days",
+       "level", "level_progression_speed", "friend_network_size", "reports_received", "night_play_ratio", "weapon_switch_speed",
+       "aiming_smoothness", "spray_control_score", "game_sense_score", "communication_rate", "team_play_score", "buy_decision_score",
+       "first_blood_rate", "survival_time_avg", "damage_per_round", "utility_usage_rate", "crosshair_placement"]
+
+
+def build_c24(train, test):
+    """The 24 columns above with missing cells filled by the TRAINING median (no test statistics)."""
+    med = train[C24].median()
+    return train[C24].fillna(med).reset_index(drop=True), test[C24].fillna(med).reset_index(drop=True)

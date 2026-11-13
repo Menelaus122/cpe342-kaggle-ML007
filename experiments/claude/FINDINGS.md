@@ -459,3 +459,604 @@ Same folds, same 26-member v8 pool, paired Poisson bootstrap of the score differ
 - **Uploaded 2026-11-08: v9 scored 0.76242, the same as v8** (snapshot `versions/v9_LB0.76242`). So the merged pipeline reproduces
   v8's Task 3 quality on the hidden test rows.
 - Pre-merge notebooks and `submission.csv` are backed up in `versions/pre_t3_merge_backup_2026-11-08/`.
+
+### How can the top team be at 0.76297? (2026-11-08)
+The score fits two very different profiles (equal task weights):
+
+| Profile | T1 | T2 | T3 | T4 | T5 | Leaderboard |
+|---|---|---|---|---|---|---|
+| ours (v8/v9): player_id structure in T2/T5, Task 4 misaligned | 0.84 | 0.968 | 0.794 | ~0.21 | ~1.0 | 0.7624 |
+| clean tabular models + **working Task 4** + Isolation-Forest-level Task 5 | 0.84 | 0.755 | 0.79 | 0.95 | 0.48 | 0.763 |
+
+- Our player_id gains (+0.21 on T2, +0.52 on T5) are about the same size as a working Task 4 (+0.74), so the two totals coincide.
+- The TA baselines fit the second profile and cannot be reached with Task 4 at chance: default tabular models (T1 0.82, T2 0.75, T3 0.76) + a CNN at ~0.95 + Isolation Forest (0.46) give 0.748 (the challenge baseline is 0.75); simpler models + a weaker CNN (~0.7) give ~0.68 (the ground baseline).
+- Under the first profile the 0.00055 gap is about one SD of the leaderboard's own noise (public-row sampling plus Task 4 chance variation between teams).
+- Either way the leaders are not ahead on Tasks 1 or 3. The difference between teams sits in Task 4.
+- **Task 1 metric reading checked with our own uploads:** v3 → v4 (τ 0.163 → 0.190 plus the Task 5 union) changed the score by −0.00234. Positive-class F2 predicts −0.00265 (off by 0.0003, inside the noise); macro-F2 predicts −0.00023 (off by 0.0021). So the scorer uses positive-class F2, as we assumed.
+- **Sharper TA question #1:** Task 4's `test.csv` ids are random strings (`scyd5lz`, `slbh6z4`, ...) in unsorted order, while the image folder sorts as `s001rpz.jpg`, `s001six.jpg`, .... Nothing states whether ANS{i} is the i-th row of `test.csv` or the i-th image in sorted-filename order (or some other order).
+- **Sorted-filename order tested (v10, user request): 0.76257 vs v9 0.76242.** +0.00015 on the leaderboard = +0.00075 on Task 4, i.e. still
+  chance level (a correct order would give ~0.91). Two random alignments differ by about ±0.0009 on the leaderboard, so the +0.00015 is
+  noise. The answer key is in neither `test.csv` order nor sorted-filename order. The Task 4 zip on Drive is unchanged since 2026-10-05
+  (same size as our 2026-11-03 copy), so there is no newer data version. Only the TAs can resolve it.
+
+## Round 9 (2026-11-08): methods from the literature (`ay_t3_research.py`, `az_t1_research.py`, `ba_t1_ranker_check.py`)
+
+**Task 3 in context** (OOF): predict 0 for everyone 0.500 · segment median 0.620 · history × segment factor 0.722 · default
+random forest 0.760 · v3 pipeline 0.789 · **current pipeline 0.794** · our model + knowing who spends 0 (oracle) 0.852.
+
+### Task 3 (baseline B0 = merged pipeline pool, exact LP blend, 0.79423)
+| Experiment | Method (source) | OOF | Δ vs B0 | 95% CI | Decision |
+|---|---|---|---|---|---|
+| R1 | BG/NBD + Gamma-Gamma customer-base features (Fader, Hardie & Lee 2005) in a new hurdle | 0.79424 | +0.00001 | [−0.00001, +0.00004] | discard |
+| R2 | zero-inflated lognormal network, mixture-median read-out (Wang, Liu & Miao 2019) | 0.79423 | +0.00000 | [+0.00000, +0.00000] | discard |
+| R1+R2 | both | 0.79424 | +0.00001 | [−0.00001, +0.00004] | discard |
+| R3 | L1-optimal multiplier per prediction decile (nested) | 0.79410 | −0.00013 | [−0.00018, −0.00007] | discard |
+| R4 | ensemble selection with replacement (Caruana et al. 2004) instead of LP weights | 0.79429 | +0.00006 | [+0.00004, +0.00008] | significant but negligible (~+0.00001 LB); not merged |
+
+- **BG/NBD does not fit this data:** the maximum-likelihood fit degenerates (r, α → 0; a, b → very large), so P(alive) ≈ 1 for almost
+  everyone. Stage-1 AUC 0.7848 vs 0.7849, stage-2 MAE 0.1359 vs 0.1360. The synthetic recency/frequency columns do not behave like
+  a purchase process.
+- **ZILN network:** AUC 0.780 (GBDT stage 1: 0.785), log MAE on spenders 0.153 (GBDT ratio models: 0.136). Alone 0.7835 with the
+  median read-out, 0.7791 with the paper's mean read-out (the mean is the wrong target for an absolute-error metric). The LP blend
+  gives it zero weight.
+
+### Task 1 (baseline B0 = notebook stack, nested F2 0.8364)
+| Experiment | Method (source) | OOF AUC | OOF F2 | Δ | 95% CI | Decision |
+|---|---|---|---|---|---|---|
+| Q1 | focal-loss LightGBM γ = 1 as 6th member (Lin et al. 2017) | 0.8912 | 0.8369 | +0.0006 | [+0.0000, +0.0011] | borderline, not kept |
+| Q1′ | focal loss γ = 2 | 0.8915 | 0.8364 | +0.0001 | [−0.0005, +0.0006] | discard |
+| Q2 | pairwise-ranking XGBoost (rank:pairwise) as 6th member | 0.8912 | 0.8373 | +0.0009 | [+0.0002, +0.0015] | discard: test-weighted +0.0002, CI [−0.0009, +0.0012] |
+| Q3 | expected-F2 plug-in decision rule (Lipton et al. 2014; Nan et al. 2012) | 0.8910 | 0.8367 | +0.0003 | [−0.0002, +0.0008] | discard |
+
+- Q3's cut-off per fold is 0.167–0.168. On the test predictions it would cut at 0.170 (59.5% flagged vs 60.0% at 0.163), so the
+  decision rule we use is already where the theory puts it. Not applied (it would use test predictions to set the cut-off).
+- **Q2 check (`ba_t1_ranker_check.py`, stopped by Claude Code for low system memory after its main result):** seed 42 reproduces
+  +0.0009 (CI [+0.0003, +0.0015]), but reweighted to the test set's missing-value rates the gain is +0.0002, CI [−0.0009, +0.0012],
+  and on rows with all four key columns +0.0001. Like the imputation idea in round 8, the gain sits in rows missing key columns,
+  which the test set rarely has. Task 1 stays unchanged.
+- **Full check, re-run 2026-11-09:** seed 7 gives OOF +0.0004 (CI [−0.0002, +0.0010]), test-weighted +0.0002 (CI [−0.0008, +0.0012]);
+  seed 42 OOF +0.0009, test-weighted +0.0002 (CI [−0.0009, +0.0012]); both seeds averaged OOF +0.0009, test-weighted +0.0004
+  (CI [−0.0007, +0.0014]). The OOF gain depends on the seed and none of the test-weighted intervals is above 0: discard.
+- **Round 9 conclusion:** no pipeline change. Every literature method either adds nothing or helps only training rows that the
+  test set does not resemble.
+
+## Task 4 convention confirmed (2026-11-10, `bb_t4_alignment_check.py`)
+The convention was confirmed: Task 4 uses the datacard codes and ANS{i} = row i of `test.csv` (ANS00001 = first row). That is exactly
+what v1–v9 use (v10's sorted order is wrong). End-to-end check of our column:
+1. v9's task4 = argmax of the cached ensemble probabilities on 97.9% of rows (the rest are the class-wise multipliers); nothing is reordered when writing.
+2. A saved checkpoint re-run on `test.csv` rows by file name reproduces the cached probabilities (same class on 600/600 rows), so cache row i = `test.csv` row i.
+3. The same checkpoint scores 98.7% on held-out training images with the text labels mapped to the datacard codes.
+So our Task 4 file follows the stated convention exactly, yet the upload history (equal weights) still implies Task 4 ≈ 0.21. The cause
+is outside our file: the Task 4 answer key / scorer, or unequal task weights. Only the TAs can check (e.g. score v9's Task 4 column on its own).
+
+## Round 10 (2026-11-10): forensic audit + generalisation checks (`bc_audit_phase1.py`, `bd_phase2_t1t2.py`, `bf_phase2_t5.py`, `bg_phase2_t3.py`)
+Acceptance rule for this round: better on >= 4 of 5 folds, fold std not larger, paired-bootstrap 95% CI above 0, and (Task 1) not worse
+under the test's missing-value pattern.
+
+### Phase 1 audit
+| Check | Task 1 | Task 2 | Task 3 | Task 4 | Task 5 |
+|---|---|---|---|---|---|
+| train-vs-test AUC (all / missing indicators only / median-filled values) | 0.901 / 0.903 / 0.894 | 0.500 / 0.496 / 0.498 | 0.498 / 0.498 / 0.498 | – | test only |
+| largest value shift (KS on observed values) | 0.010 | 0.012 | 0.010 | brightness 115 → 105 | – |
+| informative missing columns (p < 0.001) | 0 of 31 | 0 of 44 | 0 of 32 | – | – |
+| impossible values | none (bounded scores clipped at their limits) | none (`account_age_days = 999` is not a sentinel) | none | 0 unreadable, all 230×120, 41 near-blank train frames | 207 accounts off-globe (139 teleports, 68 date-line wraps, already handled); `refund_count_2/3 = −1` in 16% = floor, not anomaly-related |
+| duplicates / constant / collinear | none / none / none | none / none / none | none / none / hist ~ prev (known identity) | no duplicate images | none / none / per-period lat, lon, skill series |
+
+- **Task 1's shift is only in which cells are missing** (test misses key columns far less often, a few others more often). Values do not
+  shift and missingness carries no label signal (MCAR). Under a test-like missing-value pattern the LightGBM member scores F2 0.847 vs 0.835
+  plain, so the test F2 should be above the OOF estimate.
+
+### Task 1 (B0 nested F2 0.8364, folds 0.8347 / 0.8369 / 0.8374 / 0.8343 / 0.8386, std 0.0016)
+| Exp | Change | F2 | Δ | 95% CI | folds better | fold std | test-like member Δ | Decision |
+|---|---|---|---|---|---|---|---|---|
+| A1 | missing-value indicators + native NaN | 0.8363 | +0.0002 | [−0.0003, +0.0008] | 4/5 | 0.0017 | −0.0001 | discard |
+| A2 | median imputation | 0.8362 | +0.0000 | [−0.0007, +0.0008] | 3/5 | 0.0020 | −0.0006 | discard |
+| A3 | masking-robust training (10% random cells masked, rows duplicated) | 0.8365 | +0.0003 | [−0.0003, +0.0011] | 3/5 | 0.0021 | +0.0009 | discard |
+| A4 | cut-off = median of per-fold optimal cut-offs | 0.8365 | +0.0001 | [−0.0002, +0.0005] | 3/5 | 0.0014 | – | discard |
+| A5 | isotonic calibration of members before stacking | 0.8363 | −0.0001 | [−0.0006, +0.0005] | 2/5 | 0.0009 | – | discard |
+| A6 | LightGBM averaged over 3 seeds | 0.8362 | +0.0001 | [−0.0006, +0.0007] | 3/5 | 0.0017 | −0.0005 | discard |
+
+Stacker calibration: Brier 0.1245, ECE 0.010 (already calibrated; the logistic stacker is a Platt-type calibrator).
+
+### Task 2, features only (B0 nested macro-F1 0.7536, folds 0.7535 / 0.7481 / 0.7544 / 0.7558 / 0.7562, std 0.0029)
+| Exp | Change | macro-F1 | Δ | 95% CI | folds better | fold std | Decision |
+|---|---|---|---|---|---|---|---|
+| B1 | class multipliers = median of per-fold optima | 0.7540 | +0.0004 | [−0.0003, +0.0013] | 3/5 | 0.0027 | discard |
+| B3 | LightGBM averaged over 3 seeds | 0.7534 | −0.0004 | [−0.0010, +0.0001] | 2/5 | 0.0023 | discard |
+
+Stacker calibration: log-loss 0.6058, multiclass Brier 0.3272.
+
+### Task 5: the brief's consensus ensemble vs the pipeline
+| Detector | flags | gap families caught | seed stability (Jaccard) | F3 vs id block (reference only) |
+|---|---|---|---|---|
+| pipeline: 6 gap families + dependence pocket | 2,191 | 100% | deterministic | **0.983** |
+| consensus (IF, ECOD, COPOD, MCD, AE), robust scaling, knee cut | 12,942 | 94% | 0.935 | 0.605 |
+| same, cut at the pipeline's count | 2,191 | 61% | 0.869 | 0.552 |
+| robust scaling + PCA 90% subspace, knee / same count | 12,939 / 2,191 | 72% / 48% | 0.905 / 0.833 | 0.457 / 0.420 |
+| quantile scaling, knee / same count | 12,935 / 2,191 | 90% / 39% | 0.921 / 0.704 | 0.572 / 0.358 |
+| quantile scaling + PCA, knee / same count | 12,944 / 2,191 | 88% / 37% | 0.934 / 0.810 | 0.566 / 0.345 |
+
+The knee of a fused score is degenerate on this data (it cuts at half of all accounts), and at any matched count the consensus misses
+most of the families. The pipeline stays.
+
+### Task 3 (B0 = merged pipeline 0.79423, folds 0.7876 / 0.7946 / 0.7977 / 0.8011 / 0.7903, std 0.00487)
+Already in place and not re-tested: L1 objectives (the median is the NMAE-optimal target), Tweedie as a mean member, folds stratified on
+zero / positive-quantile bins of the target, the zero gate at the median cross-over (round 8). Huber is not used because it targets
+something between the mean and the median.
+
+| Exp | Change | OOF | Δ | 95% CI | folds better | fold std | Decision |
+|---|---|---|---|---|---|---|---|
+| C2 | the 4 ratio stage-2 models with ~99% of the blend weight averaged over seeds 42 / 2026 / 777 | 0.79434 | +0.00011 | [−0.00001, +0.00023] | 4/5 | 0.00498 | discard (CI touches 0; ~+0.00002 LB) |
+| C3 | C2 + stage-1 P(y>0) averaged over the same seeds | 0.79435 | +0.00011 | [−0.00001, +0.00023] | 4/5 | 0.00497 | discard |
+
+Seed averaging lowers every member's stage-2 error a little (0.1357 → 0.1350 for CatBoost), so the effect is real but too small to
+clear the bar. It is the closest of all round-10 changes.
+
+### Multi-seed summary (brief step 3)
+3-seed averaging was tested for the main GBDT of every task: Task 1 +0.0001 (3/5 folds), Task 2 −0.0004 (2/5), Task 3 +0.00011 (4/5,
+CI touching 0). None clears the acceptance rule, so the single-seed models stay.
+
+### Deliverables
+`src/audit.py` + section 3.6 of the master notebook and a "Data-quality audit" cell in each task notebook. No model or decision changed.
+
+## Round 11 (2026-11-10): Task 4 on the test images, Task 1 tuning (`bh_t4_foundation_feats.py`, `bi_t4_probe_eval.py`, `bj_t1_tune.py`)
+
+### Task 4: how good are we on the TEST images? (label-free)
+The fine-tuned models are much less sure on test than out-of-fold: median max-probability 0.89 vs 0.91, and only 38–46% of test images
+above 0.9 vs 73–82% OOF. The fold models agree with each other on 90–92% of test images, ConvNeXt and DeiT on 90%.
+Three published estimators of accuracy without labels (they read our own predictions on the unlabeled test images, nothing is fitted):
+ATC (Garg et al. 2022), DoC (Guillory et al. 2021), agreement-on-the-line (AGL, Baek et al. 2022; 15 model pairs, probit fit r = 0.94).
+
+Frozen foundation features + logistic-regression probe (same 5 folds), to see whether web-scale features lose less under the shift:
+
+| Model | OOF acc | OOF macro-F1 | ATC | DoC | AGL | agrees with our ensemble on test | predicted test shares (7-11k / fiveN / freefried / pube / roblock) |
+|---|---|---|---|---|---|---|---|
+| ConvNeXt-T (fine-tuned) | 0.9886 | 0.9865 | 0.869 | 0.897 | 0.910 | 0.945 | 0.17 / 0.24 / 0.15 / 0.26 / 0.17 |
+| DeiT-III-S (fine-tuned) | 0.9862 | 0.9839 | 0.897 | 0.908 | 0.901 | 0.954 | 0.17 / 0.25 / 0.15 / 0.25 / 0.18 |
+| CLIP ViT-B/16, frozen | 0.8683 | 0.8526 | 0.737 | 0.782 | 0.696 | 0.675 | 0.25 / 0.20 / 0.16 / 0.27 / 0.14 |
+| DINOv2-B (reg4), frozen | 0.9153 | 0.9036 | 0.798 | 0.819 | 0.757 | 0.741 | 0.21 / 0.21 / 0.14 / 0.28 / 0.16 |
+| SigLIP-2 B/16, frozen | 0.8774 | 0.8631 | 0.764 | 0.802 | 0.707 | 0.712 | 0.23 / 0.19 / 0.15 / 0.26 / 0.17 |
+| all three concatenated | 0.9382 | 0.9297 | 0.815 | 0.858 | 0.793 | 0.779 | 0.21 / 0.21 / 0.14 / 0.27 / 0.17 |
+| (train label shares) | | | | | | | 0.39 / 0.14 / 0.18 / 0.19 / 0.10 |
+
+- Our fine-tuned ensemble is estimated at **~0.87–0.91 accuracy on test** (vs 0.99 OOF): a real domain shift, worth ~0.08–0.1 of
+  Task 4 *if* the answer key is fixed.
+- Frozen features are worse on test by every estimator (0.70–0.86), so they are not more robust here → **discarded**.
+- Every model, including the independent frozen ones, predicts only ~17–25% 7-11 Knights on test vs 39% in train: the test set very
+  likely has a different class mix (label shift), not a model that fails on 7-11 Knights.
+
+### Task 1: tuning every boosted-tree member (`bj_t1_tune.py`, studies in `outputs/optuna_round11.db`)
+Before: LightGBM tuned (40 trials, 2026-11-03); XGBoost and CatBoost on fixed settings. Optuna TPE, 30/30/25 trials on a 3-fold split,
+positive-class F2 at the best cut-off, trial 0 = current settings. Then each tuned member (learning rate halved, notebook rule) was swapped
+into the stack on the 5 pipeline folds against the same member refitted with its current settings (control stack F2 0.8366, folds
+0.8343 / 0.8375 / 0.8370 / 0.8350 / 0.8394, std 0.0018).
+
+| Member | tuning folds: current → best | member F2 (5 folds): current → tuned | stack F2 | Δ | 95% CI | folds better | fold std | test-like member Δ | Decision |
+|---|---|---|---|---|---|---|---|---|---|
+| XGBoost | 0.8354 → 0.8364 | 0.8340 → 0.8359 | 0.8371 | +0.0005 | [−0.0002, +0.0012] | 3/5 | 0.0017 | +0.0031 | discard (closest) |
+| CatBoost | 0.8351 → 0.8359 | 0.8358 → 0.8358 | 0.8364 | −0.0003 | [−0.0009, +0.0004] | 2/5 | 0.0019 | +0.0005 | discard |
+| LightGBM (re-tuned, positive-class F2) | 0.8360 → 0.8368 | 0.8347 → 0.8359 | 0.8367 | +0.0001 | [−0.0006, +0.0007] | 3/5 | 0.0017 | +0.0010 | discard |
+| all three tuned | | | 0.8367 | +0.0001 | [−0.0007, +0.0008] | 3/5 | 0.0018 | +0.0015 | discard |
+
+Tuning lifts single members by up to +0.002 F2, but the stack already averages their differences away: at most +0.0005 for the stack,
+inside the noise. The pipeline keeps its settings; tuned values are in `outputs/bj_t1_tuned_params.json`.
+
+### Last year's 1st-place repo (github.com/Saltywan/CPE342-KAGGLE, CPE342 1/2025; public; read on 2026-11-11)
+Same competition data (same Task 4 test images and ids). What they did, and what it tells us:
+
+| Task | Their method | Ours | Result on our folds |
+|---|---|---|---|
+| 1 | 24 of 31 raw columns, median imputation, RF / LGB / XGB / Cat (Optuna) + LightGBM meta-model, cut-off on macro F2 | 49 features, native NaN, 5 members + LR stacker, positive-class F2 | their recipe 0.8376 vs ours 0.8364; their members alone are strong (Cat 0.8370) → **adopted as extra members** (below) |
+| 2 | stack + **`player_id` features** (number, normalised, quartile bucket) | `player_id` blocks in v9 | they used the id too and still won both boards: useful for the TA question on `player_id` |
+| 3 | median imputation, LGB-MAE / XGB-squared / Cat-MAE + LightGBM-MAE meta | identity repair, ratio hurdle, L1 blend | their recipe **0.78276** vs ours **0.79423** → nothing to take |
+| 4 | ConvNeXt-V2-T, 224×224, no augmentation, class-weighted CE, trained on **56,318** labelled images (train + validation) | ConvNeXt-T + DeiT-III-S, 31,546 images | `test.csv` has `id = ANS00001…` + `file_name = scyd5lz.jpg…`: **ANS{i} = row i of test.csv, exactly our order** |
+| 5 | PyOD PCA, contamination 5% | 6 gap families + pocket | much weaker than ours (Isolation-Forest level) |
+
+- Their first five Task 4 test predictions (printed in the notebook) agree with ours on 3/5; the two disagreements are dark,
+  very noisy images where all 12 of our models agree with each other. A test-like re-weighting of our OOF (`bl_t4_testlike.py`:
+  train-vs-test classifier on DINOv2 / CLIP embeddings, AUC 0.82–0.84) gives **0.984 accuracy on test-like training images**
+  (0.981 in the most test-like decile; 0.982 in the darkest quintile), so the disagreements do not indicate a broken model.
+- Last year's teams had ~24.8k more labelled Task 4 images than we do. Whether this year has a validation set is a TA question.
+
+### Task 1: their ideas on our folds (`bk_lastyear_methods.py`, `bm_t1_rf_confirm.py`, `bn_t1_combined.py`, `bo_t1_seedavg.py`)
+| Variant | OOF F2 | Δ | 95% CI | folds better | test-like Δ | Decision |
+|---|---|---|---|---|---|---|
+| LightGBM meta-model instead of LR stacker | 0.8368 | +0.0005 | [−0.0002, +0.0012] | 4/5 | – | discard |
+| + RandomForest (median-imputed), vs cached members | 0.8374–0.8375 (3 seeds) | +0.0010…+0.0011 | all > 0 | 4–5/5 | +0.0012 | superseded: vs refitted members only +0.0001 (2-seed avg) |
+| their whole recipe (LGB meta) | 0.8376 | +0.0012 | [+0.0002, +0.0021] | 4/5 | – | reference |
+| **+ their 4 members (24 cols, median), 2-seed average** | **0.8383** | **+0.0016** | **[+0.0008, +0.0024]** | **5/5** | **+0.0023** [+0.0004, +0.0042] | **KEEP → merged** |
+| + RF + their 4 (2-seed avg) | 0.8381 | +0.0014 | [+0.0006, +0.0022] | 4/5 | +0.0022 | keep-level, not chosen (fewer folds) |
+| + their CatBoost only (2-seed avg) | 0.8379 | +0.0012 | [+0.0004, +0.0020] | 5/5 | +0.0020 | keep-level, smaller |
+
+(Baseline for the last four rows = all our members refitted, F2 0.8367.) Single seeds vary: + their 4 gave +0.0015 with seed 42
+and +0.0004 with seed 7, hence the 2-seed averaging in the pipeline. LightGBM ablation: our 49 features 0.8351, their 24 columns
+0.8355 (median) / 0.8363 (native NaN), all 31 raw columns 0.8344 / 0.8364: the gain comes from diversity, not from one better input.
+
+### v11 upload and a second look at last year's repo (2026-11-11)
+- **v11 = v9 + round-11 Task 1: public 0.76242, the same as v9.** The expected ~+0.0003 (Task 1 weight × the 387 changed labels
+  on the public share of the rows) is below what the public split can show. The +0.0016 nested OOF gain (5/5 folds) is the evidence;
+  v11 is the better final pick between the two. Snapshot: `versions/v11_LB0.76242/`.
+- **Same test set as last year.** Their Task 4 notebook predicts ~25.9k images (405 batches of 64) and their `test.csv` starts at
+  `scyd5lz.jpg`, like ours (25,889 rows). Their labelled set was 56,318 images, class counts {0: 15,865, 1: 8,601, 2: 12,277,
+  3: 8,838, 4: 10,737}; ours is 31,546 {12,429, 4,407, 5,596, 5,926, 3,188}. Every one of our counts is below theirs, consistent
+  with this year's train being a subset of last year's train + validation. Their held-out accuracy was 0.989 (8% split, epoch 10),
+  the same level as our OOF; nothing in their Task 4 recipe beats ours.
+- **Task 2:** their `player_id` features (number, normalised, z, quartile bucket) in a GBDT stack cannot beat the id block:
+  our id-block OOF 0.968 is the ceiling set by the 3% random label flips (block + features 0.9678). Nothing to take.
+- **Last year's leaderboard score is not in the repo.** Kaggle renders the leaderboard with JavaScript, so it could not be read
+  here. Because the test set is the same, last year's top public score would show how much of this year's gap to it is Task 4
+  scoring. Do **not** late-submit our predictions to last year's competition: it scores against the same hidden test labels,
+  which is test-set probing.
+
+### Task 5: is there a second leaking column? (`bp_t5_leak_scan.py`, `bp2_t5_leak_scan.py`, 2026-11-11)
+Prompted by a rumour of "one more leaking feature". Reference = the id block (2,070 accounts). Result: **no second leak.**
+- No column encodes the id: largest |Spearman(id, column)| outside the block 0.017 (noise ~0.012). NaN count per row and file
+  row position vs block: AUC 0.501 / 0.501. No duplicated rows, no non-integer value shared between rows, no constant
+  period-4/period-3 ratios, decimal digits as written in the csv differ by < 0.7 digits (friend_removes only, from the injection).
+- Best single-column AUC for the block is 0.63 (friend_adds_4).
+- **Values that occur only inside the block:** device_count_4 = 4 (156), guild_changes_1 = 3 (112), guild_changes_4 = 4 (97);
+  339 accounts, 0 outside. These are injected anomaly values (outside the normal range), i.e. real signal, and **all 339 are
+  already flagged** by the clean pipeline. Adding them changes nothing (F3 vs block 0.9827 → 0.9827).
+- Flag columns are weak: password_changed = 1 → 25% in block, mass_item_sale = 1 → 34%, vpn_usage = 1 → 12%.
+- v11's Task 5 is the id block itself (F3 1.0 if the block is the truth), so no second leak could raise v11.
+
+## Round 12 (2026-11-11): the "break the plateau" brief (`bq0_row_lag.py`, `bq_t1_paradigms.py`, `bq2_t1_followup.py`, `br_t2_maha.py`)
+Only the parts not tested in earlier rounds were run; same folds, nested cut-offs, test-like check and acceptance rule.
+**Nothing passes. No pipeline change, no new submission.**
+
+**Rules applied.** The denoising autoencoder is fitted on training-fold rows only (fitting it on test rows would be using the test
+set for a training-related purpose). TabPFN / TabICL are pre-trained models, which the rules allow for Task 4 only. AutoGluon and
+similar AutoML frameworks are prohibited. No test labels, pseudo-labels or leaderboard probing.
+
+**Past CPE342 repositories (Phase 1).** 12 repositories from the 1/2025 class besides Saltywan's (notebooks downloaded as data, never
+run). Best printed CV per task: T1 F2 0.8368 (tangIwza: LGB/XGB/Cat equal blend; ours 0.8383); T2 0.9685 with `player_id`
+(PasinS47: the same id blocks we found; ours 0.968), features only ≤ 0.754 (ours 0.7536); T3 normalised MAE 0.271 at best
+(PPANUT; ours ≈ 0.259, i.e. score 0.794); Liliable2's "NMAE 0.170" is computed on spenders only (zeros left out), not comparable;
+T4 held-out F1 0.935–0.992 (ours 0.988). No repo beats us on any task. Not used: `KwanchanokThungsuk/Player_Intelligence_System`
+(created 2026-11-05 with this year's data, so a current competitor); `chotanansub/karena-kaggle` holds only a README title and banners.
+
+**Methods research.** TabM (Gorishniy et al., ICLR 2025; parameter-efficient MLP ensemble) and RealMLP (Holzmüller et al., NeurIPS
+2024) are the strongest recent tabular nets and appear in recent Kaggle wins, usually blended with GBDTs via hill climbing or ridge
+stacking. Both papers report roughly GBDT-level accuracy, not a consistent margin.
+
+**Row order (Phase 2.1).** Neighbour-to-neighbour (lag-1) dependence in file order and in id order, Tasks 1–3 train/test and Task 5:
+no feature or target exceeds 4/√n in any file, except the known Task 2 id blocks (94% of id-neighbours share a segment vs 28% by
+chance). Cross-task links were ruled out in round 7.
+
+### Task 1 (baseline = current pipeline stack, 9 members, nested F2 0.8383)
+| Exp | Change | OOF F2 | Δ | 95% CI | folds better | test-like Δ | Decision |
+|---|---|---|---|---|---|---|---|
+| N1 | spline (quantile knots) + missing flags + scaled logistic regression member (alone 0.8081) | 0.8379 | −0.0004 | [−0.0009, +0.0001] | 2/5 | +0.0001 | discard |
+| N2 | LightGBM + in-fold class-conditional Mahalanobis distances (Ledoit-Wolf), seed 42 | 0.8385 | +0.0002 | [+0.0001, +0.0004] | 5/5 | +0.0002 | passed, but see seeds |
+| N2 | same, seed 7 / seed 2026 | 0.8384 / 0.8383 | +0.0001 / +0.0001 | include 0 | 4/5 / 3/5 | +0.0001 / −0.0001 | discard |
+| N2 | same, 3-seed average | 0.8383 | +0.0000 | [−0.0001, +0.0002] | 2/5 | +0.0002 | **discard** (seed 42 was luck) |
+| N3 | LightGBM + 128-d swap-noise DAE bottleneck (DAE fitted on training-fold rows) | 0.8382 | −0.0001 | [−0.0003, +0.0002] | 2/5 | +0.0001 | discard |
+| N4 | TabM-style MLP ensemble (k = 16, BCE; alone 0.8144) | 0.8383 | +0.0000 | [−0.0001, +0.0002] | 1/5 | −0.0000 | discard |
+| N5 | TabM with BCE + (1 − soft-F2) loss (alone 0.8130) | 0.8382 | −0.0001 | [−0.0003, +0.0002] | 1/5 | −0.0002 | discard |
+| S1 | rank averaging of the 9 members, no stacker | 0.8290 | −0.0093 | [−0.0105, −0.0080] | 0/5 | −0.0103 | discard |
+| S2 | Caruana hill climbing on F2 (nested; weights mostly Cat / their Cat / LGB) | 0.8370 | −0.0013 | [−0.0020, −0.0006] | 0/5 | −0.0010 | discard |
+
+The first S2 run fed logits to the 0.05–0.95 cut-off grid (0.7659); the fixed run maps back to probabilities. The logistic stacker
+stays the best combiner: it uses all nine members and is fitted, not searched.
+
+### Task 2, features only (no-`player_id` fallback; v11's Task 2 is the id block)
+| Exp | Change | macro-F1 | Δ | 95% CI | folds better | Decision |
+|---|---|---|---|---|---|---|
+| B0 | notebook stack + nested class multipliers | 0.7536 | – | – | – | baseline |
+| M1 | + LightGBM with 4 in-fold class Mahalanobis distances (alone 0.7542 vs plain 0.7536) | 0.7535 | −0.0001 | [−0.0007, +0.0007] | 3/5 | discard |
+| M2 | class multipliers shrunk 30% toward 1 | 0.7538 | +0.0002 | [−0.0003, +0.0007] | 3/5 | discard |
+
+### Brief items already tested in earlier rounds (not repeated)
+- Task 1: tabular MLP (round 3), in-fold kNN target features (round 4, E1), focal loss and pairwise ranking (round 9, Q1/Q2),
+  expected-F2 decision rule (Q3), isotonic calibration (round 10, A5), Optuna tuning (round 11). The metric is positive-class F2,
+  not macro (v3 → v4 upload pair, round 7).
+- Task 3: L1 / quantile (12 levels) / Tweedie members, median read-out, hurdle with exact zeros, L1-optimal decile multipliers
+  (R3), Caruana selection (R4: +0.00006, negligible), zero-inflated lognormal network (R2).
+- Task 4: class-wise multipliers are already in the pipeline; frozen CLIP / DINOv2 / SigLIP probes (round 11) were worse. More
+  backbones are not run: Task 4 scores at chance on the leaderboard until the TAs fix the key (README question #1), so a better
+  Task 4 model cannot move the score now.
+- Task 5: trajectory features (per-period shifts, jumps, burstiness, geo hops; round 2), multi-view ensemble (IF / ECOD / COPOD /
+  MCD / autoencoder, round 10: F3 0.35–0.61 vs pipeline 0.983), the F3 cut-off rule (flag when P(anomaly) > F3/10 ≈ 9%).
+  v11's Task 5 is the id block, so nothing can raise it.
+
+## Round 13 (2026-11-11): cross-task links, calibration, Task 4 labels (`bs_cross_task.py`, `bt_t5_cutoff.py`, `bu_t4_labels.py`, `bv_t3_scale_whale.py`, `bv2_t3_followup.py`)
+
+**Rules kept:** auxiliary models use training rows only, test rows are only predicted, and no upload variants were made. The brief asked for two Task 5 variants "to isolate Task 5's impact on the leaderboard"; that is the probing the rules forbid, and the numbers below say both would score lower anyway. `sample_submission.csv`: only column names and types were read.
+
+**1. Cross-task links: none.**
+- Exact entity match on all matching columns (4-10 columns, T1/T2/T3 in every train/test combination): 0 rows, equal to the shuffled baseline. Pairs with Task 5 share one column only and match at exactly the chance count.
+- 82 pairings of matching columns by ANS position or by `player_id`, train and test: largest |Spearman| 0.0368 (n = 4,682, about 2.5 standard errors, the size expected from 82 tries). Task 2 segment = Task 3 segment on 28.0% of rows.
+- v11 by ANS id: mean predicted Task 3 spending by Task 2 class is 10,380 / 10,353 / 10,583 / 10,722 (a linked Whale would be many times higher). Every chi-square p > 0.19, Cramer's V <= 0.0153. The clean file agrees.
+- Transfer (rank-mapped shared columns, fitted on the other task's training rows): Task 3 member +0.00014 (4/5) but weight 0.0 in the blend in all 5 folds, so +0.00000; Task 2 member +0.0000 (3/5); Task 1 member F2 -0.0003 (3/5). All discard.
+
+**2. Task 5 cut-off: v11 is already at the top.**
+- v11 flags 2,070 = 7.996%, identical to the id block. The score of each upload implies Task 5 = 0.99-1.01 given Task 4 = 0.20-0.22.
+- Consensus score alone: best F3 against the block is 0.664 at the top 18%. Knee at 5.90%; the score falls from 124 to 3.3 between the top 3% and 4%.
+- Adding consensus flags to v11 lowers F3 against the block: top 10% 0.943, top 20% 0.852, top 35% 0.740.
+- If the true rate were 12%, v11 would score about 0.69 and the leaderboard total would be about 0.70, not 0.762. That scenario is excluded by the uploads we already have.
+
+**3. Task 4: the label-order hypothesis cannot explain the score.**
+- Datacard, slides 20-21 and our code all use the alphabetical order. Simulating the order quoted in the brief on OOF gives macro-F1 0.0028, not 0.21 (no class stays in place).
+- Permutations by fixed points: 0 -> 0.003, 1 -> 0.200, 2 -> 0.397, 3 -> 0.594, 5 -> 0.988. A shuffled row order gives 0.200 +- 0.002. So 0.21 fits a shuffled key or a code permutation with exactly one class in place (45 of 120), and only the TAs can tell which.
+- Slide 24 shows Task 4 as text; text uploads scored Task 4 = 0, integers about 0.21, floats about 0.03. Worth stating in TA question #1.
+- Model: 2-backbone OOF macro-F1 0.9881, accuracy 0.9899, weakest class 0.9802, h-flip TTA already in. Above the brief's 0.95 bar, so no upgrade was trained.
+
+**4. Task 3: the exact L1 blend already solves the scale.** Baseline B0 = pipeline, 0.79423, scale 1.000.
+
+| Variant | NMAE | delta | 95% CI | folds | Decision |
+|---|---|---|---|---|---|
+| A1 nested scale alpha 0.90-1.15 | 0.79423 | 0 | 0 | 0/5 | discard (alpha = 1.000 in every fold) |
+| A2 nested alpha + zero cut-off tau | 0.79423 | 0 | 0 | 0/5 | discard (tau = 0 in every fold) |
+| A3 sum-matching alpha | 0.79423 | -0.00000 | [-0.00006, +0.00005] | 2/5 | discard |
+| W1 raw-scale Huber member | 0.79423 | 0 | 0 | 0/5 | discard (weight 0.0 in all 5 folds; member alone 0.78206) |
+| W2 top-spender raw L1 model | 0.79423 | 0 | 0 | 0/5 | discard (nested weight 0 in every fold) |
+| E1 Task 2 segment member in the blend | 0.79423 | 0 | 0 | 0/5 | discard (weight 0.0) |
+| **C1 cap predictions at the training maximum** | **0.79434** | **+0.00011** | **[+0.00003, +0.00021]** | **4/5** | **passes; 7 OOF rows** |
+
+- sum(pred)/sum(y) = 1.0052: no undershoot. Whales are not under-predicted: on the top 1% by prediction, sum(y)/sum(pred) = 0.974 and median y/pred = 1.006; about 50% of y lies above the prediction in every decile. The "0.707" on the top 1% by actual y is selection on the outcome.
+- Top 1% of absolute errors = 39.5% of total error, of which 47.7% is actual zeros (a whale who skips a month), the part already known to be unpredictable.
+- C1 on the test file: the target is capped at 300,000 (15 training rows sit exactly there). One v11 test prediction is above it (431,946). If that row's true value is at most 300,000, its error falls by exactly 131,946 THB whatever the true value is: about +0.0003 NMAE, about +0.00006 on the leaderboard if the row is scored. This is below the public-board noise (SD about 0.0004), so an upload could not confirm it.
+- **C1 merged into the pipeline** (`scripts/nb_part2.py`, section 7.4): out-of-fold cap = each fold's training maximum, test cap = `y3.max()`, applied after the scale and the zero gate. All six notebooks re-executed with no errors; Task 3 OOF reads 0.79434. Compared with the pre-cap outputs exactly one Task 3 row changed (ANS14698, 431,946.09 → 300,000) and Tasks 1, 2, 4, 5 are identical. `submission_v12_try.csv` = `submission_v11_try.csv` with only that value capped (one line differs from v11, sha256 `de380b025cdfe095154ffdfe5ef8d57fd7ed0e48160b90d3ceb94241ca29c384`). Clean pipeline `submission.csv` = `submission_clean_try.csv`, sha256 `061cb9866cab7de5d203799a890834c6a4186790e38ec107bf90bd9f33620b28`.
+
+## Round 14 (2026-11-11): v12 audit, Task 5 cut-off, Task 3 post-processing, 10-seed bagging (`bw_r14_audit.py`, `bx_r14_t3_post.py`, `by_r14_bag.py`, `bz_r14_eval.py`, `ca_r14_build_v13.py`, `cb_r14_cache_t3_bag.py`)
+
+v12 scored **0.76248** (+0.00006 over v11, exactly the cap's predicted effect, so the capped row is in the public split). **Rules kept:** every fit uses training rows only, test rows are only predicted, no upload variants.
+
+**1. v12 audit (`outputs/bw_r14_audit.log`).**
+
+| Task | OOF | Model / rule | v12 test predictions |
+|---|---|---|---|
+| 1 (F2) | 0.83829 at the OOF cut-off, 0.83794 nested | 9-member log-odds stack; LGB/XGB/Cat/ET 1 seed, the four 24-column members 2 seeds, LogReg deterministic; tau = 0.15035 | 15,690 ones (60.605%); train prevalence 34.93% |
+| 2 (macro-F1) | 0.96777 (clean pipeline 0.75359 nested) | id block, cuts 52,000 / 84,500 / 110,500; features unused | classes 0-3: 10,352 / 6,462 / 5,211 / 3,864 |
+| 3 (NMAE) | 0.79434, folds .7877/.7947/.7977/.8013/.7903 | blend, zero gate, scale 1.000, cap 300,000 | zeros 50.02% (OOF 49.89%, train 48.12%); sum 270,797,197 |
+| 5 (F3) | no labels | `id >= 23,819` | 2,070 ones (7.996%) |
+
+**2. Task 5 cut-off (`outputs/bw_r14_audit.log`): no change.** Equal weights put Task 5 at about 1.00 (Task 4 = 0.21). The 20 lowest family ids are consecutive from 23,819. The 500 ids below the cut: 0 family, 0 pocket, evidence-rule rate 0.2%, mean consensus rank 0.459 (control band 20,000-20,499: 0.478); the 500 above: 100% family. Change points: consensus 23,818, families 23,819, evidence rules 23,819. No impossible-travel or device-switch extreme lies outside the block; login-burst extremes do, but the earlier gap scan found no cluster there. Adding the 500 ids below costs 0.0236 F3 (LB -0.0047) if they are normal; break-even needs a 10% hit rate.
+
+**3. Task 3 zero-snap and joint scale (`outputs/bx_r14_t3_post.log`): no change.** Nested fine-grid zero-snap picks tau 0-2 THB: delta -0.000000, 0/5. Nested Nelder-Mead (tau, alpha): tau 0, alpha 1.0001-1.0005, +0.0000002, 3/5. In every prediction bin above 1 THB fewer than half the rows are y = 0, so snapping loses; sum(pred)/sum(y) = 1.0051.
+
+**4. 10-seed bagging (seeds 42, 100, 2026, 777, 999, 1234, 5555, 8888, 31415, 27182; features, hyper-parameters and folds unchanged).** Seed-42 refits equal the pipeline cache exactly (max diff 0; ET 3e-16). Classification: log-odds / log-probability averaging; Task 3: probability for stage 1, log scale for stage 2. Stacker, cut-off, multipliers, readouts, L1 weights, gate and scale are re-learned on the bagged OOF, nested.
+
+Task 1 (`outputs/bz_r14_eval_t1.log`; B0 nested 0.83794, fold std 0.00117, test-like 0.85046). Single-seed spread of the whole stack over the 10 seeds: mean 0.83788, std 0.00030 (0.83731-0.83831), so v12 is a typical draw.
+
+| Variant | nested F2 | delta | 95% CI | folds | fold std | test-like delta | Decision |
+|---|---|---|---|---|---|---|---|
+| 3-seed bag | 0.83835 | +0.00041 | [-0.00001, +0.00086] | 3/5 | 0.00158 | +0.00010 | discard |
+| 5-seed bag | 0.83829 | +0.00034 | [-0.00010, +0.00079] | 3/5 | 0.00129 | -0.00026 | discard |
+| 10-seed bag | 0.83833 | +0.00039 | [-0.00010, +0.00089] | 3/5 | 0.00141 | -0.00038 | discard |
+
+Task 3 (`outputs/bz_r14_eval_t3.log`; B0 = v12 members + cap, 0.79434, fold std 0.00491). Bagged: both hurdle stages and the four ratio stage-2 models with 99.9% of the blend weight; the two near-zero-weight ratio members stay single-seed.
+
+| Variant | NMAE | delta | 95% CI | folds | fold std | Decision |
+|---|---|---|---|---|---|---|
+| 3-seed bag | 0.79450 | +0.00016 | [+0.00005, +0.00027] | 4/5 | 0.00496 | passes |
+| 5-seed bag | 0.79452 | +0.00018 | [+0.00007, +0.00031] | 5/5 | 0.00495 | passes |
+| **10-seed bag** | **0.79458** | **+0.00024** | **[+0.00011, +0.00037]** | **5/5** | 0.00498 | **passes (used)** |
+
+Task 2 (clean fallback only; v12's Task 2 is the id block; `outputs/bz_r14_eval_t2.log`; B0 = clean pipeline, nested macro-F1 0.75359, fold std 0.00293). Bagged: LightGBM, XGBoost, CatBoost (geometric mean over seeds); LogReg stays; stacker and multipliers re-learned nested.
+
+| Variant | nested macro-F1 | delta | 95% CI | folds | fold std | Decision |
+|---|---|---|---|---|---|---|
+| 3-seed bag | 0.75376 | +0.00017 | [-0.00060, +0.00083] | 3/5 | 0.00171 | discard |
+| 5-seed bag | 0.75348 | -0.00012 | [-0.00082, +0.00059] | 3/5 | 0.00209 | discard |
+| 10-seed bag | 0.75369 | +0.00009 | [-0.00058, +0.00081] | 3/5 | 0.00196 | discard |
+
+Summary of step 4: only Task 3 passes. Tasks 1 and 2 stay as in v12 and in the clean pipeline.
+
+**5. v13 (`ca_r14_build_v13.py`, `outputs/ca_r14_build_v13.log`).** `submission_v13.csv` = v12 with only the Task 3 column replaced by the 10-seed bag, following the pipeline path (0.5 x 5-fold + 0.5 x Train+Val refit per seed, then the seed average). Checks before writing: the same code fed the cached v12 members reproduces the uploaded v12 Task 3 text on 25,889 of 25,889 rows; the seed-42 Train+Val refits equal the cache (diff 0); the bagged OOF equals the evaluation (0.794578). Re-learned blend: scale 1.000, gate shift -0.0004 (v12 +0.0010), weights ratio[hist] Cat 0.673, ratio[hist] XGB 0.195, ratio[prev] LGB tuned 0.133.
+- Rows differing from v12: task1 0, task2 0, **task3 12,945**, task4 0, task5 0. Task 3: median change on changed rows 16.53 THB, mean over all rows 67.83, p99 1,264, max 6,312; relative change on rows positive in both: median 0.53%, p95 1.87%; 8 rows 0 -> positive, 11 positive -> 0; zero share 0.5002 -> 0.5003; sum ratio 1.00015; max still 300,000; corr(log1p) 0.99936.
+- `submission_v13.csv` sha256 `538d250be0078afed41090a0290148e78a83a62465cfeb9271468c729d40c76a`; `submission_clean_v13.csv` (clean fallback + the same Task 3) sha256 `7239937c8c925deba9b1a50f84facceef4f498e992662b1e09f493620b9728e6`.
+- Expected leaderboard effect at equal weights: +0.00005, below the public-board noise. The decision rests on the out-of-fold evidence, not on the public score.
+- **Merged into the pipeline** (`scripts/nb_part2.py`, sections 7.3 and 7.6; user-approved): `SEEDS3`, per-seed caches `t3r_*_s<seed>` copied from the bag run by `cb_r14_cache_t3_bag.py` (seed-42 files equal the existing cache; the notebook lambdas recompute any missing seed with the same parameters). All six notebooks re-executed, 0 error outputs; the Task 3 cell reads 0.79458 with the weights above. The pipeline `submission.csv` matched `ca_r14_build_v13.py` except 69 Task 3 values that differ by exactly 0.01 THB (seed averaging in a different floating-point order), so the final files take Task 3 from the pipeline (`cc_r14_v13_from_pipeline.py`): `submission_v13.csv` sha256 `c878a5677f4bab1a30134ae6d795bbc5cff265483b73fc34a008e47c63625eb0` (v12 + pipeline Task 3; same diff counts as above), `submission_clean_v13.csv` = `submission.csv` sha256 `bf4c4a364cf0c35b2518b8776b77823e1bbc288d9bfead45b33efd9f448c72f2`. The three format-variant files change in Task 3 only. The earlier sha256 values in this item are superseded.
+
+## Round 15 (2026-11-12): five "structural blind spot" checks (`cd_r15_blindspots.py`, logs `outputs/cd_r15_t124.log`, `outputs/cd_r15_t3.log`)
+
+Baseline = the current pipeline / v13. Nothing passes, so no new submission (v13 stays the candidate). Every fit uses training rows only; nested = chosen on four folds, scored on the fifth.
+
+**1. Binary vs macro F2 (Task 1).** The code uses positive-class F2 (`src/config.py` `FBETA_AVERAGE = "binary"`, `optimize_threshold` default); the macro reading exists only as `outputs/format_variants/submission_task1_macro_F2.csv`. OOF: tau_binary 0.15035 (binary 0.83829, macro 0.71475; 15,690 test ones = v12); tau_macro 0.400 (binary 0.74093, macro 0.78015; 9,897 ones, **5,793 test labels flip**); max-min compromise 0.355 (binary 0.77770, macro 0.77742; 4,363 flips). Switching to tau_macro would cost 0.097 F2 = **0.0195 LB** if the scorer is binary; the compromise costs 0.061 F2 = 0.012 LB. Our own uploads already settle it: v3 -> v4 observed -0.00234, binary predicts -0.00265, macro -0.00023. Task 5 has no cut-off to choose: v12/v13 = the id block, which is optimal under both readings if the block is the truth.
+
+**2. Task 3 tail (B0 0.794578, the 10-seed pipeline).**
+- Error by group of the prediction: predicted 0 = 51,902 rows, 2.6% of the error; deciles 8-10 of the positive predictions (7,768-300,000 THB) = 83.7% of the error and 93.0% of total y. Every decile has 48-51% of y above the prediction (a centred median), and sum(pred)/sum(y) is 0.90-1.02 in deciles 8-10. No compression of the tail.
+- Nested power calibration a * yhat^b: a 0.94-0.98, b 1.002-1.006, -0.00010, CI [-0.00015, -0.00004], 2/5 -> discard. With a zero cut-off: tau0 0-0.1 THB, same result.
+- Raw-scale members: LGB-L1, XGB-L1, Cat-MAE (already in the pool) get weight 0.0 in every fold. New raw Huber members (LightGBM 0.78193, CatBoost 0.78027 alone) also get 0.0 in every fold (delta exactly 0). Forced 10/20/30% mixes of raw L1 or Huber: -0.00024 to -0.00207, 0/5 folds in every case.
+- Why: an L1 model on log1p(y) (and the mixture-median read-out) estimates the conditional median of y itself, because the median commutes with a monotone transform. The median is already the absolute-error optimum, so it is not a "relative error" estimate that a raw-scale model would correct.
+
+**3. player_id (Tasks 2 and 5).**
+- Task 2: the id block decides 100% of v12/v13 test rows; features are never consulted (no tie-break). The clean feature pipeline disagrees on 5,429 test rows (21%). Train flips (label != block) = 3,117 = 2.997%, spread evenly over the other three classes of each block. Features cannot see them: AUC 0.507, mean P(block) 0.685 on flipped rows vs 0.690 on the rest, the feature argmax equals the true label on 7.3% of flips. Neighbouring ids carry nothing: P(flip | previous id flipped) 0.0298 vs base 0.0300; the majority label of the k nearest training-fold ids (k = 2, 6, 20) reproduces the block (agreement 0.978-1.000) and never recovers a flip. Nested soft prior (features override the block only above a learned log-odds margin): the margin chosen is 5 in every fold, i.e. never override, +0.00000. 0.968 is the random-flip ceiling.
+- Task 5: the id rule decides 100% of rows; detectors are not combined. Disagreements (round 14): 145 pocket flags and 69 evidence-rule hits outside the block (the latter the known date-line false positives); 24 block accounts no detector flags. The 500 ids below the cut look like a far control band.
+
+**4. Task 4.** `t4_round11_probes.npz` = round-11 frozen CLIP / DINOv2 / SigLIP linear probes (worse than the fine-tuned models, discarded). v12/v13 Task 4 = ConvNeXt-Tiny + DeiT-III-S (5-fold + full-data models, h-flip TTA, class multipliers), datacard codes, test.csv row order. If the key is unrelated to our column, class k scores 2 p_k q_k / (p_k + q_k) in expectation, which is maximised at p = q and gives exactly 0.200: re-mixing classes cannot beat chance (our mix 0.200 against our own predicted mix; 0.184 against the training mix). Random alignments on a 12,944-row public half differ by SD 0.0037 on Task 4 = 0.00075 LB; the 0.00067 gap to #1 is 0.9 SD. Building a class-mix variant would mean tuning to a broken key and could only be checked by uploading (probing), so nothing was built.
+
+**5. Seeds and cut-off smoothing.** Seeds were settled in round 14: Task 1 10-seed bag discarded (v13 keeps 1 seed for LGB/XGB/Cat/ET and 2 for the 24-column members), Task 2 is the id block (clean 10-seed bag discarded), Task 3 already uses 10 seeds. Task 1 cut-off rules vs B0 (pipeline argmax, nested 0.83794):
+
+| Rule | nested F2 | delta | 95% CI | folds | test-like | full-data tau | test flips | Decision |
+|---|---|---|---|---|---|---|---|---|
+| Gaussian-smoothed curve, sigma 0.005 | 0.83810 | +0.00016 | [-0.00004, +0.00035] | 4/5 | +0.00004 | 0.1525 | 42 | discard |
+| sigma 0.01 | 0.83798 | +0.00004 | [-0.00018, +0.00025] | 3/5 | -0.00014 | 0.1535 | 57 | discard |
+| sigma 0.02 | 0.83808 | +0.00013 | [-0.00016, +0.00043] | 3/5 | +0.00008 | 0.1565 | 122 | discard |
+| sigma 0.04 | 0.83824 | +0.00030 | [-0.00002, +0.00059] | 3/5 | +0.00026 | 0.1565 | 122 | discard |
+| median of 1,000 bootstrap argmaxes | 0.83802 | +0.00008 | [-0.00006, +0.00022] | 2/5 | -0.00004 | 0.1510 | 12 | discard |
+
+The OOF curve is flat: F2 stays within 0.0005 of the best for tau 0.1415-0.1665, a band holding 426 test rows, so any of these cut-offs changes at most ~0.0001 LB.
+
+## Round 16 (2026-11-12): micro-gain harvesting (`ce_r16_t1_members.py`, `cf_r16_eval.py`; logs `outputs/cf_r16_t1.log`, `cf_r16_t2t5.log`, `cf_r16_t5.log`, `cf_r16_t3.log`)
+
+The brief asked to keep +0.0001 to +0.0004 variance-reduction gains even when the CI overlaps zero. Two rules are printed: strict (as before) and **relaxed = mean nested gain > 0 (and for Task 1 test-like gain >= 0)**. v14 would use the relaxed rule. TabM is within the rules: our own PyTorch BatchEnsemble MLP trained from scratch on training folds (not pre-trained, not AutoML). **Nothing passes even the relaxed rule, so no v14 was built (it would equal v13).**
+
+**Task 1** (B0 = v13, nested 0.83794, test-like 0.85046). TabM and spline-LR retrained with test predictions (`outputs/r16_t1_members.npz`; OOF corr with round 12: 0.999 / 0.99999); 10-seed bag refitted on Train+Val (`by_r14_bag.py full t1`). Alone: TabM 0.81492, spline-LR 0.80825, 10-seed stack 0.83858; corr(stack, TabM) 0.907. Order fixed before the run: (1) brief recipe, (2) bag + smoothed cut-off, (3) bag + argmax.
+
+| Variant | nested F2 | delta | 95% CI | folds | test-like delta | test flips vs v13 | strict | relaxed |
+|---|---|---|---|---|---|---|---|---|
+| (1) 0.88 bag + 0.08 TabM + 0.04 spline, smoothed cut | 0.83754 | -0.00041 | [-0.00095, +0.00019] | 2/5 | -0.00046 | 260 | discard | discard |
+| (2) 10-seed bag, smoothed cut | 0.83831 | +0.00037 | [-0.00007, +0.00084] | 3/5 | -0.00041 | 138 | discard | discard |
+| (3) 10-seed bag, argmax cut | 0.83833 | +0.00039 | [-0.00008, +0.00085] | 3/5 | -0.00038 | 151 | discard | discard |
+| (4) brief blend, argmax cut | 0.83725 | -0.00069 | [-0.00128, -0.00013] | 2/5 | -0.00096 | 270 | discard | discard |
+| (5) brief blend, bootstrap-median cut | 0.83720 | -0.00074 | [-0.00132, -0.00018] | 1/5 | -0.00105 | 260 | discard | discard |
+| bag + 5% TabM, smoothed | 0.83826 | +0.00031 | [-0.00018, +0.00079] | 3/5 | -0.00034 | 166 | discard | discard |
+| bag + 10% TabM, smoothed | 0.83790 | -0.00005 | [-0.00058, +0.00047] | 3/5 | -0.00040 | 234 | discard | discard |
+| bag + 15% TabM, smoothed | 0.83737 | -0.00058 | [-0.00118, -0.00000] | 2/5 | -0.00131 | 326 | discard | discard |
+| bag + 8% TabM + 8% spline, smoothed | 0.83679 | -0.00115 | [-0.00180, -0.00049] | 0/5 | -0.00173 | 350 | discard | discard |
+
+The brief's blend lowers F2: mixing in members 0.02-0.03 weaker that are 0.85-0.91 correlated adds bias, not just variance reduction. The 10-seed bag's +0.0004 on ordinary OOF rows turns into -0.0004 on test-like rows (the test has far fewer missing cells), so its expected test effect is negative.
+
+**Task 3** (B0 = v13, 0.794578). Forced 5/8/12% blends (gated, capped) of seven other families: LGB-L1 log1p, Tweedie, XGB-L1 raw, single-seed ratio[hist] LGB, plain hurdle, new CatBoost-MAE raw depth 6 (alone 0.78055), new ridge log1p stage 2 + mixture-median (non-GBDT, alone 0.77912): all -0.00001 to -0.00049, 0-2/5 folds. Cap: in-sample NMAE peaks at 300k (250k 0.794323 ... 300k 0.794578 ... 350k 0.794462); nested choice 290-300k, -0.000014. v13 test: 7 predictions >= 250k, 1 at the 300k cap.
+
+**Task 5.** The 25 most extreme outside-block accounts by consensus: 19 carry the `impossible_coords` rule (the known date-line coordinate artefact), the rest are geo extremes; none is a pocket flag. Top 0.1% inside the block: geo_km_per_login_4 21/21, geo_hop_max 26/26, device_count_maxjump 100/100, device_count_dev4 31/31 (the generated anomaly types sit entirely in the block), login_count_maxjump 1/26 (a natural tail). F3: adding 20 pays +0.0039 if half are real, -0.0010 if none; break-even P = 0.20. No labelled way to verify, evidence points the other way -> no change.
+
+**Task 2.** total_spending_thb and avg_monthly_spending by id-block class in test match train by true label (e.g. Whale median 45,396 vs 45,024); every class bottoms out near 500 THB, no true Whale has 0 spending, and flipped rows look like their block. Flip rate is flat across spending deciles (2-4%). No deterministic contradiction -> no change.
+
+## Round 17 (2026-11-12): the TAs' data re-release (`scripts/reorder_task4_test_cache.py`, `cg_r17_new_data_check.py`)
+
+The TAs announced a data fix: Task 1 and Task 3 unchanged, Task 2 and Task 5 new datasets, Task 4 `test.csv` corrected, schema unchanged. Sources: the Kaggle zip (`player-intelligence-system-cpe-342-ml`, downloaded by the user) for Tasks 1, 2, 3, 5 and the TAs' Drive zip (modified 2026-11-12 07:55 UTC, 625.5 MB) for Task 4.
+
+**What changed (checked by sha256 against git HEAD).**
+* Task 1, Task 3, all datacards and `sample_submission.csv`: byte-identical.
+* Task 2 train/test and Task 5 test: fully regenerated. No row's numeric features match an old row; column means move by at most 0.02 SD; same shapes (104,000 / 25,889 / 25,889).
+* **Task 2's player_id leak is gone.** Class shares are flat over all ten id deciles (Casual 0.391-0.399), and an id-only LightGBM gets OOF macro-F1 0.141 (old data: 0.968). Train and test ids do not overlap.
+* **Task 4:** the 57,435 images are byte-identical (zip CRC), and the train labels are identical (now integer codes, columns `id, file_name, label`). `test.csv` lists the same 25,889 test images in a **new order**: ANS00001 = `sjqyfwc.jpg` (old row 22,721), and no row kept its position. Our old-order Task 4 column agrees with the correctly re-ordered one on **21.25%** of rows, which matches the ~0.21 the leaderboard implied for Task 4 on every upload from v1 to v12: the answer key was in the new order all along.
+
+**What we ran.**
+* Task 4: `scripts/reorder_task4_test_cache.py` moves every cached test prediction to the row that now holds its image and stores `test_file_name`. The notebook asserts it; `train_task4.py` now writes it. Fresh inference of the fold-0 ConvNeXt and DeiT checkpoints on 512 new-order rows: argmax agrees 100%, max |prob diff| 0.004 (bf16). The old CSVs are kept in `_release_2026-11-03/`. `src/task4.load_frames` reads both formats.
+* Task 2: all `t2_*` caches deleted and retrained (tuned hyperparameters reused). OOF macro-F1: LightGBM 0.7559, XGBoost 0.7559, CatBoost 0.7545, LogReg 0.7435, stacker 0.7561, **+ class multipliers 0.7568** (old data 0.7549).
+* Task 5: the unchanged label-free pipeline finds the same structure as before: 33 tail clusters → **6 families, 1,809 accounts (6.99%)**; the derived-feature gap scan adds 0; the blind pocket scan finds exactly one pocket again (accuracy_std × kda_std, z above the noise level of 10.9), with cut-off k = 339 (estimated 194 members) → **2,148 flags (8.30%)**, expected F3 0.990 if the families are true.
+* Tasks 1 and 3 reuse their caches: their columns are identical to `submission_clean_v13.csv` (0 rows differ).
+
+**Result.** `submission.csv` (sha256 53c386ca…) is the first file whose every column belongs to the current test sets. Nothing in it uses player_id. Every earlier file (v1-v13 and the clean files) has Task 4 in the wrong order and Task 2/5 predictions for test rows that no longer exist; do not upload them.
+
+## Round 18 (2026-11-12): v14 scored 0.84873, the "two-front" brief (`ch_r18_t4_shift.py`, `cj_r18_t4_tta.py`, `ci_r18_t2_audit.py`; logs in `outputs/`)
+
+**Where the gap is.** v14 = 0.84873 (top 0.85787). v12 (old data, T2/T5 by id block, T4 in the wrong order) = 0.76248 gives T1 + T3 ≈ 1.644 → T1 ≈ 0.85 on test (the test-like estimate was 0.8505). Then v14 leaves T4 + T5 ≈ 1.84. With T5 ≈ 0.98 as on the old data, **T4 ≈ 0.86 on test** (OOF 0.989), in line with round 11's label-free 0.87–0.91. All 10 fold models agree on only 74% of test images.
+
+**Task 4, held-out-cluster validation (training images only).** K-means (20 clusters per class) on frozen DINOv2-B features, StratifiedGroupKFold(5) by cluster, fold 0 (6,354 held-out images in 20 clusters). A frozen DINOv2 probe drops from 0.911 (stratified) to 0.829 (held-out clusters), close to its estimated test accuracy, **but fine-tuned models hardly drop at all** (ConvNeXt 0.9836 vs 0.990 stratified). So this split does not reproduce what happens on the test images, and it can only rank recipes inside the training distribution:
+
+| Recipe (fold 0, same rows, 10 epochs, h-flip TTA) | acc | macro-F1 | Δ acc vs ConvNeXt [95% CI] |
+|---|---|---|---|
+| ConvNeXt-T in12k (pipeline) | 0.9836 | 0.9805 | — |
+| DeiT-III-S (pipeline) | 0.9811 | 0.9787 | −0.0025 [−0.0055, +0.0006] |
+| ConvNeXt-T, class-balanced sampling | 0.9816 | 0.9783 | −0.0020 [−0.0046, +0.0005] |
+| EVA02-S (MIM in22k) | 0.9762 | 0.9735 | −0.0074 [−0.0107, −0.0041] |
+| EfficientNetV2-S in21k | 0.9806 | 0.9779 | −0.0030 [−0.0061, +0.0000] |
+| ConvNeXt-T in22k | 0.9819 | 0.9792 | −0.0017 [−0.0044, +0.0008] |
+| pipeline pair (ConvNeXt + DeiT) | 0.9852 | 0.9826 | |
+| all six averaged | 0.9862 | 0.9837 | +0.0010 over the pair (~6 images) |
+
+Decision rules on the same held-out set (ConvNeXt): logit adjustment logits − τ·log π_train: τ = 0 → 0.9805, 0.5 → 0.9787, 1 → 0.9757 (this split keeps the train class mix, so it cannot show a label-shift gain). Class multipliers fitted on the held-out set itself (an upper bound): 0.9843, but with unstable, extreme weights (Roblock 0.36 vs 0.21 for the class-balanced model) → not transferable. `task4/train.csv` carries no metadata (id, file_name, label only).
+
+TTA / photometric restoration (pipeline fold-0 checkpoints on their own 6,310 validation images; dark or low-contrast subset = 833): every view set lies within ±0.0006 F1 of the pipeline's original + flip (ensemble 0.9878). Autocontrast lowers the hard subset (0.9799 → 0.9775), gamma for dark images changes nothing, ±10° rotations and zoom-out 0.85 move 0–5 images. The training augmentation already covers darkness, inversion, rotation and noise.
+
+**Task 2 on the new data: 0.757 is the Bayes ceiling.**
+* Stack 0.7561 → + multipliers 0.7568 in-sample, **0.7564 nested**. Members' P(true class) correlate 0.99 (LGB/XGB/Cat) and 0.94 (LogReg).
+* Confusion: Casual F1 0.822, Grinder 0.746, Whale 0.748, Social 0.711 (recall 0.678). Most confused pairs: Casual↔Grinder (8,439 rows), Casual↔Social (5,737), Social↔Whale (4,042).
+* The old feature design still fits: every engagement/spending indicator keeps its sign; the 3 `random_metric` columns are pure noise (|ρ| ≤ 0.003); class shares in the engagement × spending grid 0.394/0.202/0.250/0.154.
+* Features are independent given the class (within-class |rank corr| mean 0.004–0.010, max 0.054). Under that independence a naive-Bayes rule on per-feature class histograms is the Bayes classifier: it scores **0.7549 (0.7559 with multipliers)**, the same as the GBDTs. Adding it to the stack: +0.0001 nested.
+* Calibration is exact (accuracy 0.811 at mean p 0.811; 0.961 at p ≥ 0.95): the remaining errors are label noise. The brief's 0.775 is not reachable.
+
+**Decision:** nothing passes; no v15. The Task 4 test shift is real but no train-only validation reproduces it, so no Task 4 change can be shown to help. Options left need a ruling: (1) prior correction toward the test class mix (1,095 labels move; TA question), (2) using unlabeled test images to characterise the shift for augmentation design (grey area; ask first).
+
+## Round 19 (2026-11-12): forensic investigation of the re-released data (`ck_r19_forensics_tab.py`, `cl_r19_forensics_t4.py`; logs in `outputs/`)
+
+Model training was paused for this (ConvNeXt-in22k fold 0 is cached; `train_task4.py` resumes from there). Diagnostics only; Task 4 opened training images and files only.
+
+### 1. What the TAs changed
+* **Task 2: a fresh sample from the same generator.** Within-class KS old vs new ≤ 0.016 (5% critical value ~0.014 at the smallest class; 120 tests), class-conditional means differ by ≤ 0.026 SD (sampling noise ~0.016), categorical value sets identical, total-variation ≤ 0.005. No new row lies near an old row (median nearest-neighbour distance new→old 2.97 vs new→new 2.88): the rows were re-drawn, not perturbed. `player_id`s were re-assigned at random (train + test still use 129,889 of P000000–P129999, but a different 111 are missing; rank corr(row, id) ≈ 0).
+* **Task 5: same 25,889 ids, re-drawn rows, same generator** (per-column KS ≤ 0.017, NaN rate 0.0487 → 0.0488, invalid coordinates 207 → 218 rows, binary-flag rates within 0.003). Our flags are now flat over id deciles (7.7–8.7%), so the old "top 8% of ids" pattern is gone.
+* **Task 4:** only the test row order (round 17).
+
+### 2. Task 2: how the features are generated (new train)
+* Continuous columns: 95–96k distinct values, printed with the shortest round-trip float (15–17 significant digits), so the number of decimal places is just the value's magnitude (rank corr with integer digits −0.37 to −0.42). Re-stacking the OOF probabilities with decimal-place and significant-digit features: log-loss 0.60490 → 0.60495, macro-F1 unchanged → **no information**. (Decimal places do differ by class, p = 1e-81, only because the classes differ in magnitude.)
+* Count columns (login_streak, friend_count, tournament_entries, rare_items_count, …) are integers ≥ 0 with 0.4–1.8% at 0; bounded columns are clipped: team_play_percentage [5, 100], win_rate_ranked [25, 75], achievement/collection [10, 95], ranked_participation [0, 100] (4.7% / 4.8% at the ends), item_type_preference_* [0.05, 0.95]. Within each class most continuous columns are best fitted by a normal (or a gamma for the low-activity classes), i.e. clipped normal draws per class. random_metric_1/2 are uniform [0, 1000] / [0, 1], random_metric_3 an integer normal: pure noise, as before.
+* NaN: ~7.7% per column, MCAR (NaN count vs label χ² p = 0.59; vs OOF error AUC 0.51). Row order carries nothing (p = 0.29).
+* **Hidden sub-groups:** within-class top eigenvalues sit at the random-matrix bound for Casual (1.062 vs 1.058), Grinder (1.082 vs 1.074) and Social (1.088 vs 1.082), so those classes are single populations of independent draws. **Whale has one extra factor** (1.269 vs 1.094): vip_tier, avg_monthly_spending, spending_frequency, rare_items_count, total_spending, peak_concurrent_hours, friend_count load on it, i.e. a continuous within-Whale "intensity" level, not two archetypes. Naive Bayes (which ignores it) still equals the GBDTs, so it does not move the ceiling. (Gaussian-mixture BIC prefers 2–3 components in every class, but only because clipped and integer columns are not Gaussian; uninformative.)
+
+### 3. Tasks 1, 3, 5: per-row precision artifacts
+* Task 1: decimal places, zero count, NaN count, integer-valued count vs is_cheater: AUC 0.48–0.51. Nothing.
+* Task 3: zero count vs spending > 0 has AUC 0.34 and Spearman −0.47 with log spending, but it comes from the binary columns (tournament_participation, owns_limited_edition, is_premium_member, vip_status, guild_membership, segment = 0) that the model already uses. The L1 member's residuals are flat in the zero count, and an L1 re-fit on [member prediction, zero count] is worse (NMAE 0.27341 → 0.27365). Nothing.
+* Task 5: decimals vs our flags AUC ≤ 0.57, explained by magnitude (geo km); the share of short-precision cells differs by ≤ 0.03 between families, pocket and unflagged accounts. No generation artifact marks the anomalies.
+
+### 4. Task 5 archetypes (new test)
+Families: (1) 517 takeover / VPN teleport (password_changed + vpn_usage, location jump of hundreds of km at period 4, currency transfers and purchases up), (2) 310 skill boost + friend purge, (3) 265 near-inactive, (4) 263 silent (no communication), (5) 247 low behavior_stability, (6) 207 single-IP clockwork bots (low IP entropy, constant session lengths and login times); plus the pocket, 339 erratic-performance accounts. These cover the brief's bot farms (6), account theft (1, 2) and VPN regional exploiters (inside 1).
+**No geo-only group is missed:** among the 23,672 unflagged accounts with valid coordinates, **none** has a maximum hop above the top-1% threshold of all accounts (4,385 km); the largest unflagged hop is 335 km and the tail has no gap (largest step 11 km vs a median step of 0.1 km). vpn_usage = 1 alone is common (3,919 accounts, 15%) and is not an anomaly by itself.
+
+### 5. Task 4 (training images and files only)
+* **No metadata signal.** File names: 7 characters, always `s` + 6 random base-36 characters, Cramér's V with the label ≤ 0.036 at every position. Row order random (23,578 label runs vs 23,606 expected). Every image is 230×120 RGB baseline JPEG with the same quantisation table (one quality setting), 4:2:0 chroma, only a JFIF header, and all were written within 68 s (2025-11-22 00:13:32–00:14:40) with no class pattern: one batch re-encode by a script.
+* **Corruptions are independent random draws, already covered by our augmentation:** 42% of images rotated (black corners; 36–45% by class), noise σ continuous and roughly uniform up to ~0.1 (no discrete levels), brightness / contrast / saturation follow content (by class). Low contrast predicts our OOF errors best (AUC 0.65).
+* **No twins:** with an inversion-invariant gradient descriptor only 4 images have a neighbour above 0.98 similarity and 122 above 0.95 (84% same label, i.e. mostly unrelated low-texture frames). Training images are not corrupted copies of each other, so the stratified OOF is not inflated by near-duplicates (OOF accuracy 0.980 on the 122 vs 0.990 elsewhere).
+* **The model is mainly a HUD reader.** Fold-0 ConvNeXt on 1,500 of its validation images: full image 0.982; centre 3×3 of a 5×5 grid greyed (border/HUD only) **0.952**; border ring greyed (centre only) **0.919** (Free Fried 0.882, PUBE 0.848). Single-cell occlusion hurts most along the **bottom strip** (on-screen controls / skill bar; 7–21 ×10⁻³ drop of P(true class) per cell vs 0–8 in the centre), then the right edge. The test images it is unsure about (crowds, dark frames) look HUD-less, and centre-only accuracy (0.92) is about the size of the estimated test accuracy (0.86–0.91). This is a hypothesis, not a measurement on test.
+
+### Training adjustments derived from this (ranked by expected leaderboard impact)
+1. **Task 4: make the model use scene content, not only the HUD.** Train-time "HUD dropout" (grey out the bottom strip / border ring at random) and score it train-only on full images, centre-only and bottom-masked validation images. Up to the whole Task 4 test gap (~0.07 of Task 4, ~+0.014 LB) if the test failures are HUD-less frames; unknown otherwise. One fold-0 run (~25 min) tells whether full-image accuracy holds while centre-only rises.
+2. **Task 4: 4-backbone ensemble** (ConvNeXt + DeiT + ConvNeXt-in22k + EffNetV2), +0.002 accuracy on held-out clusters (CI > 0); ideally trained with item 1.
+3. **Task 4: plain argmax instead of the in-sample class multipliers** (nested −0.0002 for the multipliers; they move 548 test labels).
+4. Tasks 1, 2, 3, 5: no artifact, formula or missed group found; nothing to change.
+
+### Round 19b: HUD dropout, fold-0 test (`src/task4.GPUAugment._hud`, `train_task4.py --p-hud`, `cm_r19_t4_hud_eval.py`)
+Recipe: with probability 0.5 per training image, one of four modes before the corruptions: bottom strip 15–25% hidden; top strip 12–18% + the four corners hidden; all borders hidden (central 60–70% kept); or zoom into the central 60–75% (no fill). Hidden areas get the image's mean colour or uniform noise. ConvNeXt-T, pipeline fold 0, otherwise identical to `t4_cnxt_fold0`. Scored on the 6,310 fold-0 validation images with h-flip TTA; grey = 0.5 (not the training fill).
+
+| View | ConvNeXt | ConvNeXt-HUD | Δ acc [95% CI] | both averaged |
+|---|---|---|---|---|
+| full frame | 0.9878 (F1 0.9859) | 0.9872 (0.9852) | −0.0006 [−0.0030, +0.0017] | **0.9880** (0.9863) |
+| bottom 20% greyed | 0.9811 | 0.9815 | +0.0003 [−0.0024, +0.0032] | **0.9838** |
+| centre only (5×5 outer ring greyed) | 0.9336 (PUBE 0.890) | **0.9609** (PUBE 0.944) | **+0.0273 [+0.0219, +0.0326]** | 0.9578 |
+| bottom 20% cut, resized | 0.9808 | 0.9789 | −0.0019 [−0.0048, +0.0011] | **0.9826** |
+| central 70% zoom (no grey) | 0.9607 | **0.9683** | **+0.0076 [+0.0035, +0.0116]** | **0.9688** |
+
+* Passes: full-frame accuracy is unchanged within noise, accuracy without the HUD rises clearly, and the natural zoom view (no grey area the HUD model might recognise) confirms it. Averaging a normal and a HUD-dropout model is best or near-best on every view → final Task 4 = existing ConvNeXt + DeiT **plus** HUD-dropout ConvNeXt, ConvNeXt-in22k, EffNetV2-S and DeiT-III-S.
+* "Dual view" (0.75·P(view) + 0.25·P(70% zoom of the view)): +0.001–0.003 on centre-only but −0.0013 on full frames for the HUD model → not used.
+* Pipeline (`scripts/nb_part2.py` §5.2/§7.4): the six tags above; class multipliers kept only if they also pass a nested check (round 18: −0.0002 nested).
+
+### Round 19c: six-backbone Task 4 ensemble, all folds (`cn_r19_t4_hud_ensemble.py`, `co_r19_t4_views_allfolds.py`)
+HUD-dropout versions (p = 0.5) of ConvNeXt-T, ConvNeXt-T in22k, EfficientNetV2-S in21k and DeiT-III-S, trained on the pipeline's stratified folds + a full-data fit each (`train_task4.py --p-hud 0.5`, 527 GPU minutes). Every fold model predicts only its own validation images (31,546 out of fold), h-flip TTA; occluded views as in round 19b (grey = 0.5).
+
+| OOF accuracy / macro-F1 | full frame | bottom 20% greyed | centre only | central 70% zoom |
+|---|---|---|---|---|
+| ConvNeXt | 0.9886 / 0.9865 | 0.9809 | 0.9316 | 0.9578 |
+| DeiT-III | 0.9862 / 0.9839 | 0.9789 | **0.7006** (PUBE 0.342) | 0.9622 |
+| ConvNeXt-HUD | 0.9867 / 0.9845 | 0.9810 | 0.9602 | 0.9679 |
+| ConvNeXt-in22k-HUD | 0.9856 / 0.9832 | 0.9810 | 0.9605 | 0.9695 |
+| EffNetV2-S-HUD | 0.9841 / 0.9816 | 0.9775 | 0.9450 | 0.9651 |
+| DeiT-III-HUD | 0.9840 / 0.9814 | 0.9780 | 0.9527 | 0.9671 |
+| **pair (v14)** | 0.9899 / 0.9881 | 0.9847 | 0.9295 (PUBE 0.876) | 0.9669 / 0.9624 |
+| **six** | **0.9900 / 0.9883** | **0.9857** | **0.9635** (PUBE 0.946) | **0.9744 / 0.9705** |
+
+Six − pair, paired bootstrap over rows (95% CI) and per-fold accuracy:
+* full frame: macro-F1 +0.0002 [−0.0006, +0.0010], accuracy +0.0001 [−0.0005, +0.0008]; folds +0.0008 +0.0010 −0.0006 +0.0000 −0.0005 → **no loss**.
+* bottom greyed: accuracy +0.0010 [+0.0002, +0.0019], 5/5 folds.
+* centre only: macro-F1 +0.0326 [+0.0303, +0.0350], 5/5 folds (+0.027 to +0.044).
+* **70% zoom (no grey area): macro-F1 +0.0080 [+0.0068, +0.0094], 5/5 folds (+0.006 to +0.009).**
+
+* Each HUD single model loses 0.002–0.005 OOF on full frames against its normal counterpart, but the ensemble does not: averaging normal and HUD-dropout models keeps the full-frame score and inherits the robustness.
+* The normal DeiT-III collapses when the border is grey (0.70; PUBE 0.34): the ViT treats the grey ring as out-of-distribution. Its HUD-dropout version holds 0.95.
+* Class multipliers on the six-model blend: in-sample 0.9888, nested 0.9880 (−0.0003 vs argmax) → dropped, plain argmax.
+* Test labels vs v14: 548 change from dropping the v14 multipliers, 701 from the new backbones, 919 in total (3.5%). Predicted shares move most for Free Fried (0.136 → 0.150) and PUBE (0.269 → 0.253). Label-free diagnostic only (not used to choose): mean max-probability on test 0.806 (pair) → 0.790 (six), as expected from averaging more diverse models.
+* Decision: the six-backbone argmax ensemble goes into the pipeline (it was pre-registered in round 19b; the all-fold views confirm it). Whether the test gap is HUD-less frames remains a hypothesis: the gain on test is somewhere between 0 and the zoom/centre gains above.
+
+**v15 uploaded 2026-11-13: public LB 0.85032 (+0.00159 over v14).** Only the Task 4 column changed, so Task 4 rose by about +0.008 (if the LB is the mean of the five task scores). If the 548 rows moved by dropping the multipliers are net zero, the 701 rows moved by the new backbones gained about 207 net correct labels, +0.30 per changed row: between the out-of-fold rates on full frames (+0.03) and on the 70% zoom (+0.57), close to an even mix of the two. This supports the HUD hypothesis but is one noisy public-split measurement. Gap to the top (0.85787): 0.00755 ≈ +0.038 on one task.
+
+## Round 20 (2026-11-13): Task 4 blend rules, multi-crop inference, bigger / stronger HUD backbones (`cp_r20_t4_z75_views.py`, `cq_r20_t4_blend.py`, `cr_r20_t4_candidates.py`)
+Objective fixed in advance: mean of out-of-fold macro-F1 on full frames and on the 70% centre zoom (the HUD-free view without grey area; v15's LB gain fits an even mix of the two). All 31,546 training images, each predicted by the fold model that did not train on it; rule parameters chosen on four folds and scored on the fifth.
+
+| Rule (nested) | full | 70% zoom | centre only | objective vs v15 [95% CI], folds better |
+|---|---|---|---|---|
+| v15: mean of six | 0.9883 | 0.9705 | 0.9587 | — |
+| group weight on the four HUD models (picked 0.6–0.75) | −0.0003 | −0.0004 | −0.0002 | −0.0004 [−0.0006, −0.0001], 0/5 |
+| entropy gate (more HUD weight where the legacy pair's max-prob < τ) | −0.0003 | −0.0004 | −0.0002 | −0.0004 [−0.0007, −0.0000], 3/5 |
+| six free model weights (Powell) | −0.0005 | +0.0002 | +0.0012 | −0.0001 [−0.0005, +0.0003], 3/5 |
+| multi-crop: (1−b)·P(view) + b·P(central 75% zoom), with group weight | −0.0012 | −0.0001 | +0.0010 | −0.0006 [−0.0011, −0.0002], 0/5 |
+| multi-crop with the gate | −0.0007 | −0.0003 | +0.0003 | −0.0005 [−0.0009, −0.0001], 1/5 |
+| multi-crop with free weights | −0.0013 | −0.0020 | +0.0007 | −0.0016 [−0.0021, −0.0011], 0/5 |
+
+* In-sample, more weight on the HUD models trades full frames for HUD-free views almost one for one (w = 0.9: full −0.0010, zoom +0.0006); v15's equal mean (w = 2/3) is already on the plateau. A second, zoomed view costs full-frame accuracy from b = 0.1 on (0.9883 → 0.9879) and helps only the centre-only view: the HUD models already saw centre zooms in training. **Nothing beats the plain mean.**
+* PUBE Mobile ↔ Free Fried is 15–19% of the errors in every view (zoom 136 of 809; centre-only 221 of 1,152); the lowest recalls without HUD are Roblock (0.953 zoom) and FiveN (0.960). A perfect PUBE/FF specialist would add at most ~0.4% on the zoom view, so none was trained.
+* Fold-0 candidates as a seventh member (pass rule fixed in advance: objective CI > 0 and full ≥ −0.0005):
+
+| fold 0, macro-F1 | full | 70% zoom | centre only | objective |
+|---|---|---|---|---|
+| ConvNeXt-T HUD p=0.5 (cnxt_hud) | 0.9852 | 0.9632 | 0.9538 | 0.9742 |
+| ConvNeXt-S in12k HUD p=0.5 (cnxtS_hud) | 0.9872 | 0.9675 | 0.9593 | 0.9774 |
+| ConvNeXt-T HUD p=0.8 (cnxt_hud8) | 0.9832 | 0.9646 | 0.9565 | 0.9739 |
+| v15 six | 0.9887 | 0.9700 | 0.9590 | 0.9793 |
+| six + cnxtS_hud | 0.9892 | 0.9709 | 0.9607 | 0.9801 |
+| six + cnxt_hud8 | 0.9885 | 0.9706 | 0.9615 | 0.9795 |
+
+  Seven − six: cnxtS_hud objective +0.0008 [−0.0002, +0.0018], full +0.0005 [−0.0001, +0.0013] → **fail** (CI includes 0, though positive on every view); cnxt_hud8 +0.0002 [−0.0008, +0.0012] → fail. Stronger HUD dropout trades full-frame accuracy for little. ConvNeXt-S is the better single model on every view, but at batch 64 it overflows the 8 GB GPU into shared memory (~990 s per epoch vs ~120 s for Tiny): 5 folds + full would take ~16 h as is.
+* **No v16:** no rule or candidate passed, so the pipeline stays at v15. With Task 4 at ~0.87 on test against 0.97 on the HUD-free proxy, most of the remaining test gap is content these train-only proxies cannot simulate; the open TA questions (prior alignment, test-image-informed augmentation) are the remaining large levers.

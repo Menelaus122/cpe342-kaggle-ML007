@@ -113,7 +113,7 @@ _cv = pick("def cached(name, fn, force=False):")
 _CV_TAIL = _cv[_cv.index("def cached(name, fn, force=False):"):]
 CV_SETUP = {
     k: "from sklearn.metrics import roc_auc_score, confusion_matrix, f1_score\n"
-       "from sklearn.ensemble import ExtraTreesClassifier\nfrom sklearn.linear_model import LogisticRegression\n"
+       "from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier\nfrom sklearn.linear_model import LogisticRegression\n"
        "from sklearn.pipeline import make_pipeline\nfrom sklearn.impute import SimpleImputer\n"
        "from sklearn.preprocessing import QuantileTransformer\n\n"
        + {1: "folds1 = make_folds(y1)\nprint(\"fold sizes:\", [len(v) for _, v in folds1])\n",
@@ -143,6 +143,19 @@ ABLATION = {
        'b["T3 FE (L1 raw THB)"] = cached("t3r_base_fe_raw", lambda: run_cv("lgb", "regression", BASE, X3, y3, X3_test, folds3, name="T3 FE raw"))\n'
        'display(pd.DataFrame([[k, "NMAE", nmae(y3, np.clip(b[k]["oof"] if "raw THB" in k else np.expm1(b[k]["oof"]), 0, None))] for k in b],\n'
        '                     columns=["experiment", "metric", "OOF score"]))',
+}
+
+AUDIT = {
+    1: 'from src import audit\nwith pd.option_context("display.max_colwidth", 120):\n'
+       '    display(pd.Series(audit.task_audit(t1_train, t1_test, "is_cheater"), name="Task 1").to_frame())',
+    2: 'from src import audit\nwith pd.option_context("display.max_colwidth", 120):\n'
+       '    display(pd.Series(audit.task_audit(t2_train, t2_test, "segment"), name="Task 2").to_frame())',
+    3: 'from src import audit\nwith pd.option_context("display.max_colwidth", 120):\n'
+       '    display(pd.Series(audit.task_audit(t3_train, t3_test, "spending_30d", regression=True), name="Task 3").to_frame())',
+    4: 'from src import audit\n'
+       'display(pd.DataFrame(audit.image_audit(task4.DATA, {"train": t4_train, "test": t4_test})).T.rename_axis("Task 4 images"))',
+    5: 'from src import audit\nwith pd.option_context("display.max_colwidth", 200):\n'
+       '    display(pd.Series(audit.task_audit(None, t5_test), name="Task 5").to_frame())',
 }
 
 TUNE_PARAMS = {
@@ -244,6 +257,12 @@ def task_cells(k):
     else:
         code(pick("groups5 = [g for g in task5.temporal_groups")); code(pick('lat = t5_test[[f"login_lat_{i}"'))
         md(md_for_task(pick("For every behaviour, the deviation of **period 4"), 5, lead=5))
+
+    # 3.6 data-quality audit (same checks as the master notebook, this task only)
+    md("### Data-quality audit\nAdversarial validation (train vs test), missing values vs target, impossible values, duplicates and "
+       "collinearity, computed by `src/audit.py` on features only (see the master notebook §3.6).")
+    code(AUDIT[k])
+    md(md_for_task(pick("**Audit findings.**"), k))
 
     # 4. feature engineering
     fe_md = {1: "## 4.1 Task 1", 2: "## 4.2 Task 2", 3: "## 4.3 Task 3", 4: "## 4.4 Task 4", 5: "## 4.5 Task 5"}[k]
