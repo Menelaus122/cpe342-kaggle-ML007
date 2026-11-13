@@ -1207,3 +1207,33 @@ GridMask buys robustness only to grid occlusion and pays on every natural view. 
 alpha = 1 is the Bayes exponent only for calibrated posteriors. The ensemble is under-confident (label smoothing, Mixup/CutMix: temperature 0.46 on OOF), so its calibrated posterior is p^(1/T) and dividing that by π equals argmax p·π^−T: the exact exponent for in-distribution frames is about 0.46, and frames that are ambiguous for other reasons push the optimum up. On the uniform simulation 0.75-1.0 is a plateau (0.9741 / 0.9741 / 0.9740) and 1.15 is past it. No training-only evidence prefers 1.0 over 0.75; alpha stays 0.75 and is not tuned on the leaderboard.
 
 **Round 26, Task 3: the space predictions are combined in** (`dl_r26_t3_blendspace.py`, nested, pipeline 0.79458 = seeds averaged in log space, members L1-blended in THB). Seeds averaged in THB instead: +0.00001 [+0.00000, +0.00001], 4/5 folds (seed-to-seed SD of mu is small, so the arithmetic and geometric means nearly coincide). Members combined as a weighted geometric mean −0.00002; weighted median −0.00007 (0/5); unweighted mean −0.00104, median −0.00056, geometric mean −0.00117. The fitted L1 blend in THB is the right combination; the +0.00001 is two millionths of the leaderboard score and is not worth a pipeline change on its own.
+
+**Round 26, Task 4: Swin-Tiny as an eighth member, fold 0** (`scripts/train_task4.py --tag swinT_hud --model swin_tiny_patch4_window7_224.ms_in22k_ft_in1k --h 224 --w 448 --lr 1e-4 --p-hud 0.5 --grad-ckpt --folds 0`; `cv_r22_t4_eval.py swinT_hud`; about 20 min per epoch on the 8 GB card). Hierarchical window attention at a higher resolution, the one architecture family not yet in the ensemble.
+
+| fold 0 (6,310 images) | full | zoom70 | HUD hidden | real dark / low contrast | objective |
+|---|---|---|---|---|---|
+| cnxt_hud alone | 0.9852 | 0.9632 | 0.9538 | 0.9839 | 0.9742 |
+| swinT_hud alone | 0.9814 | 0.9594 | 0.9461 | 0.9674 | 0.9704 |
+| seven members | 0.9892 | 0.9709 | 0.9607 | 0.9825 | 0.9801 |
+| seven + swinT_hud | 0.9889 | 0.9715 | 0.9622 | 0.9807 | 0.9802 |
+
+Adding it: objective +0.0001 [−0.0009, +0.0011] with argmax, full frames −0.0003, real dark frames −0.0019. Under the v17 rule (alpha 0.75) the objective is −0.0002 [−0.0014, +0.0008] at the training mix and −0.0003 [−0.0012, +0.0007] at a uniform mix; 0.2% / 0.3% of labels change. Not a gain under the rule the pipeline uses, so folds 1-4 are not trained (about 17 GPU-hours) and the ensemble stays at seven members. Its only clear advantage is the synthetic 75% grid occlusion (0.870 vs 0.782), which no real view reproduces. With round 22 (GridMask, SigLIP 2) this is the third backbone in a row that adds nothing on fold 0: the seven-member average is saturated on training-distribution frames, and what is left on the test set is the image shift, which more members of the same kind do not address.
+
+**Round 26, Task 2: MLP with periodic (PLR) embeddings** (`dn_r26_t2_plr.py`; Gorishniy et al. 2022; K = 24, sigma 0.3, 3 seeds, settings fixed before the run). Alone 0.7396 (log-loss 0.677), below round 23's plain MLP (0.7494) and LightGBM (0.7559). As a fifth stack member −0.0005 [−0.0011, +0.0001], 0/5 folds; replacing LogReg −0.0005, 1/5. Discard. The features are independent given the class (round 23), so a model that is additive in the features is already close to optimal and higher-frequency feature maps only add variance. "CatBoost feature combinations" needs no run: the pipeline's CatBoost already receives the seven nominal columns as `cat_features` with the default `max_ctr_complexity = 4`, and those columns carry no signal (Cramér's V ≤ 0.008).
+
+**Round 26, Task 1: multi-architecture level-2 stacker** (`dm_r26_t1_l2stack.py`, `do_r26_t1_l2_final.py`). Meta-models on the nine members' logits, settings fixed before the run, 3 seeds each, outputs averaged in logit space; meta-model and cut-off both nested; repeated on three other stacker splits (members fixed). Delta of the nested F2 against the logistic stacker (0.8379 on the pipeline folds):
+
+| level 2 | pipeline folds | split 1 | split 2 | split 3 | mean | folds better |
+|---|---|---|---|---|---|---|
+| LightGBM (300 trees, 8 leaves) | +0.0006 [+0.0000, +0.0012] | −0.0001 | +0.0002 | +0.0003 | +0.0003 | 5 / 2 / 2 / 4 |
+| LightGBM DART | −0.0004 | −0.0010 | −0.0001 | −0.0001 | −0.0004 | 1 / 0 / 2 / 2 |
+| CatBoost depth 4 | −0.0000 | +0.0001 | −0.0005 | +0.0004 | −0.0000 | 3 / 3 / 2 / 3 |
+| ExtraTrees | −0.0009 | −0.0011 | −0.0008 | −0.0009 | −0.0009 | 0 / 0 / 1 / 0 |
+| MLP (32, 16) | +0.0004 | −0.0004 | +0.0002 | +0.0006 | +0.0002 | 5 / 1 / 3 / 3 |
+| LR + LightGBM | +0.0005 [+0.0001, +0.0009] | −0.0002 | +0.0002 | +0.0005 | +0.0003 | 5 / 1 / 3 / 4 |
+| **LR + LightGBM + CatBoost** | **+0.0006 [+0.0002, +0.0010]** | +0.0002 [−0.0002, +0.0006] | +0.0004 [−0.0000, +0.0009] | +0.0003 [−0.0003, +0.0009] | **+0.0004** | **4 / 4 / 4 / 4** |
+| all six | +0.0002 | −0.0000 | +0.0005 | +0.0003 | +0.0003 | 2 / 2 / 4 / 5 |
+
+LR + LightGBM + CatBoost is the only variant that is positive on every split with 4/5 folds each: it passes the round 25 rule (it would not have passed the old CI gate on three of the four splits, and it is the best of eight variants, so the +0.0004 is an optimistic estimate). Fitted as the pipeline would (cut-off on the full OOF: F2 0.8383 -> 0.8387, cut 0.150 -> 0.162), it changes 0.66% of OOF labels and 0.53% of test labels (136 rows: 23 newly flagged, 113 released), so the tree meta-models behave on the averaged test logits as they do out of fold. Expected effect: +0.0004 on Task 1 = about +0.00008 on the leaderboard average.
+
+**v18 built (not uploaded).** The stacker is in the pipeline (`scripts/nb_part2.py` 7.1 and the final refit; caches `t1_l2_trees`, `t1_l2_trees_full`). Master notebook: OOF F2 0.8383 -> 0.8387, cut 0.150 -> 0.162. `submission_v18.csv` differs from v17 in 136 `task1` rows (23 newly flagged, 113 released; flag rate 60.60% -> 60.26%) and in nothing else, exactly as `do_r26_t1_l2_final.py` predicted.

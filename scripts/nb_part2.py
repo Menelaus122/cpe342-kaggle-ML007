@@ -269,7 +269,7 @@ md(r"""
 
 **Level 1:** diverse model families trained on identical folds: three GBDTs with different tree-growth biases (LightGBM leaf-wise, XGBoost depth-wise, CatBoost oblivious trees), plus a bagged randomised-tree ensemble (ExtraTrees) and a linear model (logistic regression on Gaussian-rank features). Task 1 adds four members built the way last year's 1st-place team built theirs (CPE342 1/2025, public repo [Saltywan/CPE342-KAGGLE](https://github.com/Saltywan/CPE342-KAGGLE)): Random Forest, LightGBM, XGBoost and CatBoost on 24 of the 31 raw columns with training-median imputation, each averaged over two seeds. They see the data differently from our members, and adding them raises the nested OOF F2 by +0.0016 (95% CI [+0.0008, +0.0024], better in 5/5 folds, also better under test-like missingness).
 
-**Level 2:** a regularised logistic-regression stacker on the level-1 OOF log-odds. The stacker is itself cross-validated **on the same folds**, so its reported score is also out-of-fold. Its test input is the fold-averaged level-1 test predictions.
+**Level 2:** a regularised logistic-regression stacker on the level-1 OOF log-odds. The stacker is itself cross-validated **on the same folds**, so its reported score is also out-of-fold. Its test input is the fold-averaged level-1 test predictions. Task 1 averages the logistic stacker with two small tree meta-models on the same nine log-odds (LightGBM with 8 leaves and CatBoost of depth 4, three seeds each; mean of the three log-odds): with meta-models and cut-off both nested this adds +0.0002 to +0.0006 F2 on four stacker splits, better in 4/5 folds on each (round 26).
 
 **Post-processing:** the decision rule is tuned on stacked OOF predictions to maximise the *exact* metric:
 * Task 1: threshold moving (Provost, 2000).
@@ -320,16 +320,44 @@ def stack_binary(models, y, folds, C_=1.0):
     final = LogisticRegression(C=C_, max_iter=2000).fit(S, y)
     return oof, final.predict_proba(St)[:, 1], final.coef_.ravel(), final
 
-stack1_oof, stack1_test, coef1, STACKER1 = stack_binary(m1, y1, folds1)
+lr1_oof, lr1_test, coef1, STACKER1 = stack_binary(m1, y1, folds1)
+
+# Level 2, second part (round 26, experiments/claude/dm_r26_t1_l2stack.py): two small tree meta-models on the same nine log-odds,
+# LightGBM (300 trees, 8 leaves) and CatBoost (depth 4), three seeds each, cross-validated on the same folds. The final level-2
+# score is the mean of the three log-odds (logistic, LightGBM, CatBoost). Settings were fixed before the experiment; with the
+# meta-models and the cut-off both nested, F2 rises by +0.0002 to +0.0006 on four stacker splits (better in 4/5 folds on each).
+L2_SEEDS = (0, 1, 2)
+L2_LGB = dict(n_estimators=300, learning_rate=0.03, num_leaves=8, min_child_samples=200, subsample=0.8, subsample_freq=1,
+              colsample_bytree=0.8, n_jobs=8, verbose=-1)
+MAKE_L2 = {"LightGBM": lambda s: lightgbm.LGBMClassifier(**L2_LGB, random_state=s),
+           "CatBoost": lambda s: catboost.CatBoostClassifier(depth=4, iterations=400, learning_rate=0.05, random_seed=s, verbose=0, thread_count=8)}
+
+def l2_trees(S_fit, y_fit, S_apply):
+    # mean log-odds of the two tree meta-models (each the mean over its seeds), fitted on S_fit and applied to S_apply
+    return np.mean([np.mean([logit(mk(s).fit(S_fit, y_fit).predict_proba(S_apply)[:, 1]) for s in L2_SEEDS], axis=0)
+                    for mk in MAKE_L2.values()], axis=0)
+
+def l2_cv():
+    S, St = (np.column_stack([logit(m[k]) for m in m1.values()]) for k in ("oof", "test"))
+    oof = np.zeros(len(y1))
+    for tr, va in folds1:
+        oof[va] = l2_trees(S[tr], y1[tr], S[va])
+    return {"oof": oof, "test": l2_trees(S, y1, St)}
+
+sigmoid = lambda z: 1 / (1 + np.exp(-z))
+l2_mix = lambda lr_prob, trees_logit: sigmoid((logit(lr_prob) + 2 * trees_logit) / 3)     # mean of the three log-odds
+l2t = cached("t1_l2_trees", l2_cv)
+stack1_oof, stack1_test = l2_mix(lr1_oof, l2t["oof"]), l2_mix(lr1_test, l2t["test"])
 avg1_oof = np.mean([m["oof"] for m in m1.values()], axis=0)
 rows = []
-for name, p in [*[(k, v["oof"]) for k, v in m1.items()], ("Mean of probabilities", avg1_oof), ("LogReg stacker (OOF)", stack1_oof)]:
+for name, p in [*[(k, v["oof"]) for k, v in m1.items()], ("Mean of probabilities", avg1_oof), ("LogReg stacker (OOF)", lr1_oof),
+                ("LogReg + LightGBM + CatBoost stacker (OOF)", stack1_oof)]:
     thr, s = optimize_threshold(y1, p, 2.0)
     thr_b, s_b = optimize_threshold(y1, p, 2.0, average="binary")
     rows.append([name, roc_auc_score(y1, p), s, thr, s_b, thr_b])
 t1_table = pd.DataFrame(rows, columns=["model", "AUC", "macro-F2", "thr (macro)", "binary-F2", "thr (binary)"]).set_index("model")
 display(t1_table.style.format("{:.4f}").highlight_max(subset=["AUC", "macro-F2", "binary-F2"], props="font-weight:bold"))
-print("stacker log-odds weights:", dict(zip(m1, np.round(coef1, 3))))
+print("logistic stacker log-odds weights:", dict(zip(m1, np.round(coef1, 3))))
 """)
 code(r"""
 THR1_opt, SCORE1_opt = optimize_threshold(y1, stack1_oof, 2.0)
@@ -362,7 +390,7 @@ print(f"one-SE plateau (SE = {SE1:.4f}): τ in [{grid[tied1].min():.3f}, {grid[t
 print(f"regret check: at τ={THR1:.3f} the other reading ({OTHER_AVG}) scores {fbeta(y1, (stack1_oof >= THR1).astype(int), 2, OTHER_AVG):.4f} "
       f"vs {fbeta(y1, (stack1_oof >= THR1_alt).astype(int), 2, OTHER_AVG):.4f} at its own optimum τ={THR1_alt:.3f}")
 print(f"test flagged as cheaters: {pred1.mean():.2%} (train prevalence {y1.mean():.2%})")
-summary.append(["Task 1", f"{AVG_NAME} F2", SCORE1, "5 L1 models -> LogReg stacker -> tuned threshold"])
+summary.append(["Task 1", f"{AVG_NAME} F2", SCORE1, "9 L1 models -> LogReg + LightGBM + CatBoost stacker -> tuned threshold"])
 """)
 
 md(r"""
@@ -777,7 +805,8 @@ for kind, nm in (("lgb", "LightGBM-24"), ("xgb", "XGBoost-24"), ("cat", "CatBoos
                                                                                          R1_test, folds1, name=f"T1 {kind}24 seed {s}")["test"]
                                                                               for s in SEEDS24], axis=0)})
 St1 = np.column_stack([logit(blend_full(m1[k]["test"], f1[k]["test"])) for k in m1])
-stack1_test_final = STACKER1.predict_proba(St1)[:, 1]
+l2t_full = cached("t1_l2_trees_full", lambda: {"test": l2_trees(np.column_stack([logit(m["oof"]) for m in m1.values()]), y1, St1)})
+stack1_test_final = l2_mix(STACKER1.predict_proba(St1)[:, 1], l2t_full["test"])
 pred1_final = (stack1_test_final >= THR1).astype(int)
 changes.append(["Task 1", "labels changed", np.mean(pred1_final != pred1), f"flag rate {pred1.mean():.2%} -> {pred1_final.mean():.2%}"])
 

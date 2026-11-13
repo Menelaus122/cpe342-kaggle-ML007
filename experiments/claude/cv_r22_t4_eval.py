@@ -35,7 +35,8 @@ ARCH = {"cnxt_hud": ("convnext_tiny.in12k_ft_in1k", (160, 320)), "cnxt_grid": ("
         "siglip2_hud": ("vit_base_patch16_siglip_224.v2_webli", (160, 320)), "cnxtS_hud": ("convnext_small.in12k_ft_in1k", (160, 320)),
         "cnxt": ("convnext_tiny.in12k_ft_in1k", (160, 320)), "deit3": ("deit3_small_patch16_384.fb_in22k_ft_in1k", (192, 384)),
         "cnxt22k_hud": ("convnext_tiny.fb_in22k", (160, 320)), "effv2_hud": ("tf_efficientnetv2_s.in21k_ft_in1k", (160, 320)),
-        "deit3_hud": ("deit3_small_patch16_384.fb_in22k_ft_in1k", (192, 384))}
+        "deit3_hud": ("deit3_small_patch16_384.fb_in22k_ft_in1k", (192, 384)),
+        "swinT_hud": ("swin_tiny_patch4_window7_224.ms_in22k_ft_in1k", (224, 448))}
 ENS = ["cnxt", "deit3", "cnxt_hud", "cnxt22k_hud", "effv2_hud", "deit3_hud", "cnxtS_hud"]
 OUT = Path("experiments/claude/outputs/r22_views")
 OUT.mkdir(parents=True, exist_ok=True)
@@ -97,7 +98,7 @@ for t in tags:
     if (OUT / f"{t}_fold0.npz").exists():
         continue
     name, size = ARCH[t]
-    m = task4.create_model(name, pretrained=False, img_size=size if name.split("_")[0] in ("vit", "deit3", "eva02") else None)
+    m = task4.create_model(name, pretrained=False, img_size=size if name.split("_")[0] in ("vit", "deit3", "eva02", "swin", "swinv2") else None)
     m = m.cuda().to(memory_format=torch.channels_last)
     m.load_state_dict(torch.load(MODEL_DIR / f"t4_{t}_fold0.pt", map_location="cuda"))
     m.eval()
@@ -138,6 +139,28 @@ for c in [c for c in CANDS if c in P]:
     ok = np.quantile(d_obj, .025) > 0 and pt_full >= -0.0005 and pt_hard >= 0
     print(f"  {c:12s} objective {pt_obj:+.4f} [{np.quantile(d_obj, .025):+.4f}, {np.quantile(d_obj, .975):+.4f}]  full {pt_full:+.4f}  "
           f"real_hard {pt_hard:+.4f}  -> {'PASS' if ok else 'fail'}")
+
+# Round 26: the same comparison under the pipeline's decision rule since v17 (argmax p * pi^-0.75, pi = training shares), scored at
+# the training mix and at a uniform class mix (rows weighted 0.2 / pi). Same bootstrap resamples.
+pi = np.bincount(y, minlength=5) / len(y)
+wb = (0.2 / pi)[yv]
+rule = lambda ts, v: (avg(ts, v) * pi ** -0.75).argmax(1)
+print("\nunder the v17 rule (alpha 0.75): macro-F1 at the training mix / at a uniform mix; objective = mean over full and zoom70")
+for r, ts in rows.items():
+    tm = [f1_score(yv, rule(ts, v), average="macro") for v in OBJ + ["centre_grey"]]
+    um = [f1_score(yv, rule(ts, v), average="macro", sample_weight=wb) for v in OBJ + ["centre_grey"]]
+    print(f"  {r:30s} training mix full {tm[0]:.4f} zoom70 {tm[1]:.4f} centre {tm[2]:.4f} obj {np.mean(tm[:2]):.4f} | "
+          f"uniform mix full {um[0]:.4f} zoom70 {um[1]:.4f} centre {um[2]:.4f} obj {np.mean(um[:2]):.4f}")
+allr = np.arange(len(va))
+for c in [c for c in CANDS if c in P]:
+    a = {v: rule(ens, v) for v in OBJ}
+    b = {v: rule(ens + [c], v) for v in OBJ}
+    for label, w in [("training mix", None), ("uniform mix", wb)]:
+        f = lambda pred, i: f1_score(yv[i], pred[i], average="macro", sample_weight=None if w is None else w[i])
+        pt = np.mean([f(b[v], allr) - f(a[v], allr) for v in OBJ])
+        d = [np.mean([f(b[v], i) - f(a[v], i) for v in OBJ]) for i in boot]
+        print(f"  ensemble + {c} minus ensemble, {label}: objective {pt:+.4f} [{np.quantile(d, .025):+.4f}, {np.quantile(d, .975):+.4f}]; "
+              f"labels changed full {np.mean(a['full'] != b['full']):.3%}, zoom70 {np.mean(a['zoom70'] != b['zoom70']):.3%}")
 
 # Label-free diagnostic on test images (fold-0 models' test probabilities; reported only, never used to decide: being confident on
 # a test image is not the same as being right on it).
