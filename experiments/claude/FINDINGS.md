@@ -988,3 +988,46 @@ Families: (1) 517 takeover / VPN teleport (password_changed + vpn_usage, locatio
 2. **Task 4: 4-backbone ensemble** (ConvNeXt + DeiT + ConvNeXt-in22k + EffNetV2), +0.002 accuracy on held-out clusters (CI > 0); ideally trained with item 1.
 3. **Task 4: plain argmax instead of the in-sample class multipliers** (nested −0.0002 for the multipliers; they move 548 test labels).
 4. Tasks 1, 2, 3, 5: no artifact, formula or missed group found; nothing to change.
+
+### Round 19b: HUD dropout, fold-0 test (`src/task4.GPUAugment._hud`, `train_task4.py --p-hud`, `cm_r19_t4_hud_eval.py`)
+Recipe: with probability 0.5 per training image, one of four modes before the corruptions: bottom strip 15–25% hidden; top strip 12–18% + the four corners hidden; all borders hidden (central 60–70% kept); or zoom into the central 60–75% (no fill). Hidden areas get the image's mean colour or uniform noise. ConvNeXt-T, pipeline fold 0, otherwise identical to `t4_cnxt_fold0`. Scored on the 6,310 fold-0 validation images with h-flip TTA; grey = 0.5 (not the training fill).
+
+| View | ConvNeXt | ConvNeXt-HUD | Δ acc [95% CI] | both averaged |
+|---|---|---|---|---|
+| full frame | 0.9878 (F1 0.9859) | 0.9872 (0.9852) | −0.0006 [−0.0030, +0.0017] | **0.9880** (0.9863) |
+| bottom 20% greyed | 0.9811 | 0.9815 | +0.0003 [−0.0024, +0.0032] | **0.9838** |
+| centre only (5×5 outer ring greyed) | 0.9336 (PUBE 0.890) | **0.9609** (PUBE 0.944) | **+0.0273 [+0.0219, +0.0326]** | 0.9578 |
+| bottom 20% cut, resized | 0.9808 | 0.9789 | −0.0019 [−0.0048, +0.0011] | **0.9826** |
+| central 70% zoom (no grey) | 0.9607 | **0.9683** | **+0.0076 [+0.0035, +0.0116]** | **0.9688** |
+
+* Passes: full-frame accuracy is unchanged within noise, accuracy without the HUD rises clearly, and the natural zoom view (no grey area the HUD model might recognise) confirms it. Averaging a normal and a HUD-dropout model is best or near-best on every view → final Task 4 = existing ConvNeXt + DeiT **plus** HUD-dropout ConvNeXt, ConvNeXt-in22k, EffNetV2-S and DeiT-III-S.
+* "Dual view" (0.75·P(view) + 0.25·P(70% zoom of the view)): +0.001–0.003 on centre-only but −0.0013 on full frames for the HUD model → not used.
+* Pipeline (`scripts/nb_part2.py` §5.2/§7.4): the six tags above; class multipliers kept only if they also pass a nested check (round 18: −0.0002 nested).
+
+### Round 19c: six-backbone Task 4 ensemble, all folds (`cn_r19_t4_hud_ensemble.py`, `co_r19_t4_views_allfolds.py`)
+HUD-dropout versions (p = 0.5) of ConvNeXt-T, ConvNeXt-T in22k, EfficientNetV2-S in21k and DeiT-III-S, trained on the pipeline's stratified folds + a full-data fit each (`train_task4.py --p-hud 0.5`, 527 GPU minutes). Every fold model predicts only its own validation images (31,546 out of fold), h-flip TTA; occluded views as in round 19b (grey = 0.5).
+
+| OOF accuracy / macro-F1 | full frame | bottom 20% greyed | centre only | central 70% zoom |
+|---|---|---|---|---|
+| ConvNeXt | 0.9886 / 0.9865 | 0.9809 | 0.9316 | 0.9578 |
+| DeiT-III | 0.9862 / 0.9839 | 0.9789 | **0.7006** (PUBE 0.342) | 0.9622 |
+| ConvNeXt-HUD | 0.9867 / 0.9845 | 0.9810 | 0.9602 | 0.9679 |
+| ConvNeXt-in22k-HUD | 0.9856 / 0.9832 | 0.9810 | 0.9605 | 0.9695 |
+| EffNetV2-S-HUD | 0.9841 / 0.9816 | 0.9775 | 0.9450 | 0.9651 |
+| DeiT-III-HUD | 0.9840 / 0.9814 | 0.9780 | 0.9527 | 0.9671 |
+| **pair (v14)** | 0.9899 / 0.9881 | 0.9847 | 0.9295 (PUBE 0.876) | 0.9669 / 0.9624 |
+| **six** | **0.9900 / 0.9883** | **0.9857** | **0.9635** (PUBE 0.946) | **0.9744 / 0.9705** |
+
+Six − pair, paired bootstrap over rows (95% CI) and per-fold accuracy:
+* full frame: macro-F1 +0.0002 [−0.0006, +0.0010], accuracy +0.0001 [−0.0005, +0.0008]; folds +0.0008 +0.0010 −0.0006 +0.0000 −0.0005 → **no loss**.
+* bottom greyed: accuracy +0.0010 [+0.0002, +0.0019], 5/5 folds.
+* centre only: macro-F1 +0.0326 [+0.0303, +0.0350], 5/5 folds (+0.027 to +0.044).
+* **70% zoom (no grey area): macro-F1 +0.0080 [+0.0068, +0.0094], 5/5 folds (+0.006 to +0.009).**
+
+* Each HUD single model loses 0.002–0.005 OOF on full frames against its normal counterpart, but the ensemble does not: averaging normal and HUD-dropout models keeps the full-frame score and inherits the robustness.
+* The normal DeiT-III collapses when the border is grey (0.70; PUBE 0.34): the ViT treats the grey ring as out-of-distribution. Its HUD-dropout version holds 0.95.
+* Class multipliers on the six-model blend: in-sample 0.9888, nested 0.9880 (−0.0003 vs argmax) → dropped, plain argmax.
+* Test labels vs v14: 548 change from dropping the v14 multipliers, 701 from the new backbones, 919 in total (3.5%). Predicted shares move most for Free Fried (0.136 → 0.150) and PUBE (0.269 → 0.253). Label-free diagnostic only (not used to choose): mean max-probability on test 0.806 (pair) → 0.790 (six), as expected from averaging more diverse models.
+* Decision: the six-backbone argmax ensemble goes into the pipeline (it was pre-registered in round 19b; the all-fold views confirm it). Whether the test gap is HUD-less frames remains a hypothesis: the gain on test is somewhere between 0 and the zoom/centre gains above.
+
+**v15 uploaded 2026-11-13: public LB 0.85032 (+0.00159 over v14).** Only the Task 4 column changed, so Task 4 rose by about +0.008 (if the LB is the mean of the five task scores). If the 548 rows moved by dropping the multipliers are net zero, the 701 rows moved by the new backbones gained about 207 net correct labels, +0.30 per changed row: between the out-of-fold rates on full frames (+0.03) and on the 70% zoom (+0.57), close to an even mix of the two. This supports the HUD hypothesis but is one noisy public-split measurement. Gap to the top (0.85787): 0.00755 ≈ +0.038 on one task.

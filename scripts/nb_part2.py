@@ -97,6 +97,11 @@ code(r"""
 T4_BACKBONES = {   # tag -> (timm model, input HxW) as trained by scripts/train_task4.py
     "cnxt": ("convnext_tiny.in12k_ft_in1k", (160, 320)),
     "deit3": ("deit3_small_patch16_384.fb_in22k_ft_in1k", (192, 384)),
+    # round 19: the same recipe with HUD dropout (--p-hud 0.5), four backbones
+    "cnxt_hud": ("convnext_tiny.in12k_ft_in1k", (160, 320)),
+    "cnxt22k_hud": ("convnext_tiny.fb_in22k", (160, 320)),
+    "effv2_hud": ("tf_efficientnetv2_s.in21k_ft_in1k", (160, 320)),
+    "deit3_hud": ("deit3_small_patch16_384.fb_in22k_ft_in1k", (192, 384)),
 }
 fold_done = lambda tag: all((C.PRED_DIR / f"t4_{tag}_fold{f}.npz").exists() for f in range(N_FOLDS))
 if not fold_done("cnxt") and RUN_T4_TRAINING:
@@ -533,11 +538,14 @@ plt.tight_layout(); savefig(fig, "t3_calibration"); plt.show()
 
 md(r"""
 ## 7.4 Task 4: Game title detection (macro-F1)
-For each backbone, every fold model (final EMA weights) predicts its held-out fold with h-flip TTA, which gives OOF probabilities. Test probabilities are the mean over the 5 folds × 2 views. The two backbones come from different architecture families, and their probabilities are averaged:
+For each backbone, every fold model (final EMA weights) predicts its held-out fold with h-flip TTA, which gives OOF probabilities. Test probabilities are the mean over the 5 folds × 2 views. The probabilities of all backbones are averaged (plain argmax):
 * **ConvNeXt-Tiny** (CNN, IN-12k) at 160×320;
-* **DeiT-III Small/16** (Vision Transformer, IN-22k) at 192×384, with position embeddings resampled to the 12×24 token grid.
+* **DeiT-III Small/16** (Vision Transformer, IN-22k) at 192×384, with position embeddings resampled to the 12×24 token grid;
+* **HUD-dropout versions** (round 19) of ConvNeXt-Tiny, ConvNeXt-Tiny IN-22k, EfficientNetV2-S IN-21k and DeiT-III-S.
 
-Class-wise multipliers are then tuned on the OOF blend for macro-F1, and kept only if they help. Two more backbones were tried and dropped on OOF evidence:
+**Why HUD dropout.** Occluding parts of validation images shows that the first two models read mostly the on-screen HUD, above all the bottom control strip: with only the centre of the frame visible, fold-0 accuracy falls from 0.988 to 0.934 (PUBE Mobile 0.890). The test images the models are unsure about (crowds, dark frames, menus) often have no HUD. HUD dropout hides, with probability 0.5 per training image, the bottom strip, the top strip and corners, or all borders, or zooms into the central 60–75% (`task4.GPUAugment._hud`). On the same fold-0 validation images it keeps full-frame accuracy (0.9878 → 0.9872, difference inside noise) and raises centre-only accuracy to 0.961 (+0.027, 95% CI [+0.022, +0.033]; PUBE 0.944) and accuracy on a natural 70% centre zoom from 0.961 to 0.968 (+0.008, CI [+0.004, +0.012]). Averaging a normal and a HUD-dropout model is best or near-best on every view (`experiments/claude/cm_r19_t4_hud_eval.py`).
+
+Class-wise multipliers are tuned on the OOF blend for macro-F1 and kept only if they also help **nested** (chosen on four folds, scored on the fifth): in round 18 the in-sample gain of +0.0006 turned into −0.0002 nested. Two more backbones were tried and dropped on OOF evidence:
 * EfficientNetV2-S diverged at lr 3e-4 (epoch-0 loss above uniform).
 * DINOv2 ViT-S/14 (self-supervised, at 154×308, lr 5e-5, wider zoom augmentation 0.7–1.3) reached only 0.9705 macro-F1 on fold 0, versus 0.986 / 0.985 for the two kept backbones. Adding it lowered the fold-0 ensemble at every weight tried (0.9878 → 0.9863 at 1/3 weight, 0.9874 at 0.2), and it was *less* confident on test images, not more. Its run was stopped after fold 0 (`outputs/preds/t4_dino_fold0.npz`).
 
@@ -572,8 +580,14 @@ if len(T4_TAGS) > 1:
 display(pf.round(4))
 W4, SCORE4 = optimize_class_weights(y4, oof4)
 base4 = macro_f1(y4, oof4.argmax(1))
-print(f"OOF macro-F1 argmax {base4:.4f} -> with class multipliers {SCORE4:.4f} | accuracy {(oof4.argmax(1) == y4).mean():.4f}")
-if SCORE4 - base4 < 0.0005:           # not worth the extra degrees of freedom
+nest4 = np.zeros(len(y4), int)          # nested check: multipliers chosen on 4 folds, applied to the 5th
+for f in range(N_FOLDS):
+    va_ = np.load(C.PRED_DIR / f"t4_{T4_TAGS[0]}_fold{f}.npz")["val_idx"]
+    tr_ = np.setdiff1d(np.arange(len(y4)), va_)
+    nest4[va_] = apply_class_weights(oof4[va_], optimize_class_weights(y4[tr_], oof4[tr_])[0])
+print(f"OOF macro-F1 argmax {base4:.4f} -> with class multipliers {SCORE4:.4f} in-sample, {macro_f1(y4, nest4):.4f} nested "
+      f"| accuracy {(oof4.argmax(1) == y4).mean():.4f}")
+if macro_f1(y4, nest4) - base4 < 0.0005:   # keep the multipliers only if they survive the nested check
     W4, SCORE4 = np.ones(5), base4
 pred4 = apply_class_weights(test4, W4)
 

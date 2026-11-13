@@ -34,8 +34,10 @@ def main():
                     help="after validation: train one final model on ALL training images (Train+Val combined)")
     ap.add_argument("--aug-scale", type=float, nargs=2, default=None,
                     help="zoom range of the affine augmentation (default 0.85 1.15)")
+    ap.add_argument("--p-hud", type=float, default=0.0,
+                    help="HUD dropout probability (round 19): hide the bottom strip / top + corners / all borders, or zoom into the centre")
     args = ap.parse_args()
-    aug_kw = {"scale": tuple(args.aug_scale)} if args.aug_scale else None
+    aug_kw = {**({"scale": tuple(args.aug_scale)} if args.aug_scale else {}), **({"p_hud": args.p_hud} if args.p_hud else {})} or None
 
     log_dir = OUT / "logs"
     log_dir.mkdir(exist_ok=True)

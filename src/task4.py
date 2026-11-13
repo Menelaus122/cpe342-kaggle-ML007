@@ -83,7 +83,7 @@ class GPUAugment:
 
     def __init__(self, p_affine=0.6, max_rot=25, scale=(0.85, 1.15), max_shift=0.08, max_shear=8,
                  randaug_chunk=8, p_jitter=0.5, p_invert=0.15, p_gray=0.05, p_noise=0.4,
-                 max_noise=0.10, p_blur=0.2, p_erase=0.2):
+                 max_noise=0.10, p_blur=0.2, p_erase=0.2, p_hud=0.0, hud_zoom=(0.60, 0.75)):
         self.__dict__.update(locals())
         del self.__dict__["self"]
         self.randaug = v2.RandAugment(num_ops=2, magnitude=9)
@@ -141,10 +141,41 @@ class GPUAugment:
         y = torch.einsum("bij,bjhw->bihw", Mx, y)
         return torch.where(on, y.clamp(0, 1), x)
 
+    def _hud(self, x):
+        """HUD dropout (round 19): hide the screen regions that carry the HUD so the model also learns the scene itself.
+        Each selected image gets one of: 0 bottom strip (15-25% of the height), 1 top strip (12-18%) + the four corners,
+        2 all four borders (only the central 60-70% stays), 3 zoom into the central 60-75% (no fill, looks natural).
+        Hidden areas are filled with the image's mean colour or with uniform noise (50/50)."""
+        B, _, H, W = x.shape
+        dev = x.device
+        on = self._bern(self.p_hud, B, dev)
+        if not on.any():
+            return x
+        mode = torch.randint(0, 4, (B,), device=dev)
+        u = lambda lo, hi: (lo + torch.rand(B, device=dev) * (hi - lo)).view(B, 1, 1)
+        f = u(*self.hud_zoom).view(B)
+        theta = torch.zeros(B, 2, 3, device=dev)
+        theta[:, 0, 0], theta[:, 1, 1] = f, f
+        zoomed = F.grid_sample(x, F.affine_grid(theta, x.shape, align_corners=False), mode="bilinear", padding_mode="border",
+                               align_corners=False)
+        r = torch.linspace(0, 1, H, device=dev).view(1, H, 1)
+        c = torch.linspace(0, 1, W, device=dev).view(1, 1, W)
+        bottom = r > 1 - u(0.15, 0.25)
+        cw, chh = u(0.15, 0.25), u(0.20, 0.30)
+        top_corners = (r < u(0.12, 0.18)) | (((c < cw) | (c > 1 - cw)) & ((r < chh) | (r > 1 - chh)))
+        lo = (1 - u(0.60, 0.70)) / 2
+        borders = (r < lo) | (r > 1 - lo) | (c < lo) | (c > 1 - lo)
+        m = torch.where((mode == 0).view(B, 1, 1), bottom, torch.where((mode == 1).view(B, 1, 1), top_corners, borders))
+        fill = torch.where(self._bern(0.5, B, dev)[:, None, None, None], x.mean((2, 3), keepdim=True).expand_as(x), torch.rand_like(x))
+        out = torch.where((mode == 3)[:, None, None, None], zoomed, torch.where(m.unsqueeze(1), fill, x))
+        return torch.where(on[:, None, None, None], out, x)
+
     def __call__(self, x):
         B, dev = x.shape[0], x.device
         flip = self._bern(0.5, B, dev)[:, None, None, None]            # no vertical flips (HUD layout)
         x = torch.where(flip, x.flip(-1), x)
+        if self.p_hud > 0:
+            x = self._hud(x)                                            # before the corruptions, like a HUD-less frame would get them
         x = self._affine(x)
         x = self._randaugment(x)
         x = self._jitter(x)
