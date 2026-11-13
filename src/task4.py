@@ -83,7 +83,8 @@ class GPUAugment:
 
     def __init__(self, p_affine=0.6, max_rot=25, scale=(0.85, 1.15), max_shift=0.08, max_shear=8,
                  randaug_chunk=8, p_jitter=0.5, p_invert=0.15, p_gray=0.05, p_noise=0.4,
-                 max_noise=0.10, p_blur=0.2, p_erase=0.2, p_hud=0.0, hud_zoom=(0.60, 0.75)):
+                 max_noise=0.10, p_blur=0.2, p_erase=0.2, p_hud=0.0, hud_zoom=(0.60, 0.75),
+                 p_grid=0.0, grid_cover=(0.65, 0.85)):
         self.__dict__.update(locals())
         del self.__dict__["self"]
         self.randaug = v2.RandAugment(num_ops=2, magnitude=9)
@@ -170,12 +171,36 @@ class GPUAugment:
         out = torch.where((mode == 3)[:, None, None, None], zoomed, torch.where(m.unsqueeze(1), fill, x))
         return torch.where(on[:, None, None, None], out, x)
 
+    def _grid(self, x):
+        """Heavy occlusion / near-blank frame (round 22): 65-85% of the image hidden (grid_cover), either by a GridMask (random
+        period 1/6-1/2 of the height, one visible window per cell) or by one large block; fill = mean colour or black (50/50)."""
+        B, _, H, W = x.shape
+        dev = x.device
+        on = self._bern(self.p_grid, B, dev)
+        if not on.any():
+            return x
+        cover = (self.grid_cover[0] + torch.rand(B, device=dev) * (self.grid_cover[1] - self.grid_cover[0])).view(B, 1, 1)
+        vis = (1 - cover).sqrt()                                         # visible side fraction per cell
+        d = (H / 6 + torch.rand(B, device=dev) * (H / 2 - H / 6)).view(B, 1, 1)
+        rr = torch.arange(H, device=dev).view(1, H, 1).float()
+        cc = torch.arange(W, device=dev).view(1, 1, W).float()
+        o_r, o_c = torch.rand(B, 1, 1, device=dev) * d, torch.rand(B, 1, 1, device=dev) * d
+        grid_vis = (((rr + o_r) % d) < vis * d) & (((cc + o_c) % d) < vis * d)
+        bh, bw = vis * H, vis * W                                        # one visible window, the rest hidden
+        y0, x0 = torch.rand(B, 1, 1, device=dev) * (H - bh), torch.rand(B, 1, 1, device=dev) * (W - bw)
+        block_vis = (rr >= y0) & (rr < y0 + bh) & (cc >= x0) & (cc < x0 + bw)
+        visible = torch.where(self._bern(0.5, B, dev).view(B, 1, 1), grid_vis, block_vis).unsqueeze(1)
+        fill = torch.where(self._bern(0.5, B, dev)[:, None, None, None], x.mean((2, 3), keepdim=True).expand_as(x), torch.zeros_like(x))
+        return torch.where(on[:, None, None, None] & ~visible, fill, x)
+
     def __call__(self, x):
         B, dev = x.shape[0], x.device
         flip = self._bern(0.5, B, dev)[:, None, None, None]            # no vertical flips (HUD layout)
         x = torch.where(flip, x.flip(-1), x)
         if self.p_hud > 0:
             x = self._hud(x)                                            # before the corruptions, like a HUD-less frame would get them
+        if self.p_grid > 0:
+            x = self._grid(x)                                           # near-blank frame, also before the corruptions
         x = self._affine(x)
         x = self._randaugment(x)
         x = self._jitter(x)
@@ -211,12 +236,29 @@ class GPUAugment:
 
 
 # -------------------------------------------------------------------------- model
+# Backbones pre-trained with a non-ImageNet input normalisation that should see their own (round 22). The pipeline feeds
+# ImageNet-normalised tensors everywhere; for these models a forward pre-hook maps them to the model's own mean/std.
+# Older members (incl. EfficientNetV2 and EVA02, fine-tuned on ImageNet-normalised input) are deliberately left as trained.
+NATIVE_NORM = {"vit_base_patch16_siglip_224.v2_webli", "vit_base_patch16_siglip_224.webli",
+               "eva02_base_patch16_clip_224.merged2b", "vit_base_patch16_clip_224.openai"}
+
+
 def create_model(name, num_classes=5, pretrained=True, drop_path=0.1, img_size=None):
     import timm
     kw = {}
     if img_size is not None and name.split("_")[0] in ("vit", "deit3", "deit", "eva02"):
         kw["img_size"] = tuple(img_size)        # ViTs: resample position embeddings to the 2:1 token grid
-    return timm.create_model(name, pretrained=pretrained, num_classes=num_classes, drop_path_rate=drop_path, **kw)
+    model = timm.create_model(name, pretrained=pretrained, num_classes=num_classes, drop_path_rate=drop_path, **kw)
+    if name in NATIVE_NORM:
+        cfg = model.pretrained_cfg
+        a = torch.tensor(STD) / torch.tensor(cfg["std"])
+        b = (torch.tensor(MEAN) - torch.tensor(cfg["mean"])) / torch.tensor(cfg["std"])
+
+        def renorm(module, args):
+            x = args[0]
+            return (x * a.to(x.device, x.dtype).view(1, 3, 1, 1) + b.to(x.device, x.dtype).view(1, 3, 1, 1),) + tuple(args[1:])
+        model.register_forward_pre_hook(renorm)
+    return model
 
 
 def soft_ce(logits, target):
@@ -248,12 +290,13 @@ def predict_paths(model, paths, img_size, bs=128, tta=True, chunk=4096):
 
 def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epochs=10, bs=64,
                lr=2e-4, wd=0.05, label_smoothing=0.1, mix_prob=0.8, seed=42, log=print, ckpt_path=None, aug_kw=None,
-               class_balanced=False, layer_decay=None):
+               class_balanced=False, layer_decay=None, grad_ckpt=False):
     """Train one fold on the shared preloaded uint8 array `arr` (rows tr_idx); returns
     (model carrying the final EMA weights, history). With an empty `va_idx` it trains on all given
     rows without per-epoch validation (final Train+Val refit). class_balanced=True draws each epoch's rows with
     probability 1/(class count), so every class is seen equally often (uniform prior, matching macro-F1).
-    layer_decay (e.g. 0.75) gives each block lr * decay^(depth from the top), so pre-trained ViT layers move less."""
+    layer_decay (e.g. 0.75) gives each block lr * decay^(depth from the top), so pre-trained ViT layers move less.
+    grad_ckpt=True recomputes block activations in the backward pass (same result, less GPU memory; round 21, ConvNeXt-Small)."""
     from sklearn.metrics import f1_score
     from timm.utils import ModelEmaV3
 
@@ -270,6 +313,8 @@ def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epo
 
     model = create_model(model_name, img_size=img_size).to(device).to(memory_format=torch.channels_last)
     ema = ModelEmaV3(model, decay=0.999)
+    if grad_ckpt:   # after the EMA copy, so the returned EMA model runs inference without it
+        model.set_grad_checkpointing(True)
     if layer_decay is None:
         opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
     else:
