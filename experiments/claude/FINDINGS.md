@@ -1133,3 +1133,48 @@ A competitor says other teams get 0.99 on Task 4. Kaggle shows only the combined
 * LB arithmetic (round 18): T4 + T5 ≈ 1.85; T5 ≈ 0.98 (the same label-free pipeline scored 0.983 against the confirmed answer of the first release) -> T4 ≈ 0.87, matching ATC / DoC / AGL 0.87-0.91 (round 11).
 * No preprocessing bug: every train and test image is 230 x 120 RGB (headers read), same loader.
 * The competitor confirmed the 0.99 is a validation score, the same as our 0.9886: no information about the test images, and no change. The test estimate for Task 4 stays ~0.87 (0.87-0.91 label-free).
+
+## Round 25 (2026-11-13): v16 scored 0.85035; the "Generation-2" brief, first batch (`dd_`, `de_`, `df_`, `dg_`, `dh_r25_*.py`)
+**v16 = 0.85035** (v15 0.85032): +0.00003, i.e. about +0.00015 on Task 4 for 275 changed labels (about +4 net correct). Inside the leaderboard's noise; the out-of-fold gain was +0.0003 on full frames and +0.0010 on the 70% zoom.
+
+New acceptance rule from the user for this round: keep a change if its mean out-of-fold gain is positive and it is better in >= 3/5 folds; the 95% CI is reported but is no longer a gate. Every tuned quantity is still chosen nested (4 folds -> 5th), so the reported gains carry no selection bias.
+
+| Task | Change | Nested result vs pipeline | Folds | Verdict (new rule) |
+|---|---|---|---|---|
+| 2 | 4 x 4 decision matrix M = diag(w) + Delta, coordinate ascent on macro-F1 − lambda ‖Delta‖², lambda 0-0.1 and lambda chosen by an inner split | −0.0001 to +0.0000 (0.7564 -> 0.7564-0.7565), CI [−0.0003, +0.0003] | 2/5 | no: the per-class multipliers already are the macro-F1 plug-in rule; off-diagonal terms move 0.03-0.3% of rows |
+| 3 | smooth gate blend x sigmoid((p − tau) / T) x scale | picks tau 0.50, T -> 0, scale 1.000 in every fold = the pipeline's hard median gate | - | no change possible: the hard gate at p = 0.5 is the optimum of the family (45% of rows have 0.3 < p < 0.7 but carry 10% of the error) |
+| 4 | stacking head (L2 logistic on 7 x 5 log-probabilities, + entropies + image statistics; trained on full frames or full + zoom) | best of 12 settings: objective +0.0001 [−0.0004, +0.0007], full −0.0004; C = 1: centre-grey −0.007 to −0.013 | 3/5 (best) | no: +0.0001 is the best of 12, and weakly regularised heads lose on views they did not see |
+| 5 | Bayes boundary of the six families: flag if P(family | x) > 0.10 (2-component Gaussian mixture per family; and Gaussian family vs kernel-density bulk per gap column) | 0 unflagged accounts above 0.10 (mixture); 1 account at 0.16 (kernel bulk); largest posterior elsewhere 0.02-0.06 | - | no: the gaps are empty, there are no boundary accounts; F3 change +0.0000 |
+
+**Task 4, prior exponent under simulated label shift** (seven members, 200 subsamples of the OOF rows; mean macro-F1 full / zoom70 / centre-grey):
+
+| evaluation set | alpha 0 (v16) | 0.25 | 0.5 | 0.75 | 1.0 |
+|---|---|---|---|---|---|
+| training mix (39% 7-Eleven) | **0.9887** / **0.9716** / 0.9609 | 0.9884 / 0.9714 / **0.9621** | 0.9880 / 0.9706 / 0.9619 | 0.9874 / 0.9695 / 0.9611 | 0.9867 / 0.9677 / 0.9587 |
+| 7-Eleven subsampled to 20% | 0.9875 / 0.9690 / 0.9567 | 0.9878 / 0.9696 / 0.9595 | 0.9879 / 0.9700 / 0.9605 | **0.9880** / **0.9703** / **0.9613** | 0.9878 / 0.9697 / 0.9606 |
+| balanced | 0.9873 / 0.9690 / 0.9563 | 0.9878 / 0.9699 / 0.9596 | 0.9881 / 0.9708 / 0.9610 | **0.9885** / **0.9714** / **0.9623** | 0.9885 / 0.9713 / 0.9623 |
+
+alpha = 0.75 is the best exponent if the test set has about 20% 7-Eleven Knights (better than alpha 0 in 98-100% of the draws) and costs 0.0013-0.0021 if the test mix equals training. On HUD-less frames (centre-grey) alpha 0.25-0.5 gains even at the training mix: degraded frames fall back towards the largest class. `submission_v16_prior_alpha075.csv` (949 Task 4 labels differ from v16; not committed) is ready, to be used only if the TAs allow prior alignment; it is one file to choose, not a second upload to compare.
+
+**v17 = 0.85507: v16 with argmax p * pi^-0.75 for Task 4** (uploaded by the user as `submission_v16_prior_alpha075.csv`; now the pipeline rule, `nb_part2.py` section 7.4).
+* +0.00472 over v16 with only 949 Task 4 labels changed = about +0.024 on Task 4, i.e. about +610 net correct among 949 changes: at least ~780 of the changes fixed an error (if none went wrong-to-wrong), so v16 had >= ~780 Task 4 errors and its ceiling was ~0.970; with T5 ≈ 0.98 the estimate moves from ≈ 0.87 to ≈ 0.89-0.90.
+* The simulated balanced-mix gain was +0.0005 (full) to +0.005 (HUD hidden); the test gain is five times the largest of them. Test frames are far more ambiguous than OOF frames (ensemble mean max-probability 0.79 vs 0.89), and ambiguous frames fell back to the 39% class.
+* Process note for the report: alpha = 0.75 was fixed from training images before the upload (rounds 23 and 25), but v16 and the alpha file were both scored on the leaderboard, so keeping the rule is a leaderboard-informed choice. The TA question on prior alignment is still open; nothing estimated from test predictions (EM, BBSE) is used.
+
+**Round 25, Task 1: peer-group residual features** (`dh_r25_t1_peer.py`; expected value of six performance columns for a legitimate player with the same profile, regressors fitted on legitimate training-fold rows only). LightGBM + 12 residual features alone 0.8354 vs 0.8362 (OOF correlation 0.9962). In the stack (nested cut, pipeline 0.8379): as a 10th member −0.0000 [−0.0004, +0.0004], 4/5 folds (+0.0002 +0.0002 −0.0010 +0.0005 +0.0001); replacing LightGBM −0.0002, 2/5. Mean gain not positive -> not kept under the round 25 rule.
+**Round 25, Task 3 new members** (`di_r25_t3_members.py`, blend check still running when this was written): MAE of log1p(y) on spenders: pipeline ratio[hist] LGB tuned 0.1360 (10-seed bag 0.1358), DART 0.1375, Langevin CatBoost 0.1354, peer-ratio features 0.1359.
+
+**Round 22 results (fold 0, `cv_r22_t4_eval.py`): both candidates fail.** Macro-F1 on the 6,310 fold-0 validation images, objective = mean of full and zoom70:
+
+| model | full | zoom70 | centre grey | grid 75% hidden | real dark / low-contrast (833) | objective |
+|---|---|---|---|---|---|---|
+| cnxt_hud (reference) | 0.9852 | 0.9632 | 0.9538 | 0.7816 | 0.9839 | 0.9742 |
+| cnxt_grid (HUD 0.5 + GridMask 0.2) | 0.9811 | 0.9568 | 0.9539 | 0.8918 | 0.9684 | 0.9689 |
+| siglip2_hud (SigLIP 2 ViT-B/16, lr 2e-5, layer decay 0.75) | 0.9363 | 0.9084 | 0.8778 | 0.4592 | 0.8853 | 0.9223 |
+| seven-member ensemble | 0.9892 | 0.9709 | 0.9607 | 0.7975 | 0.9825 | 0.9801 |
+| + cnxt_grid | 0.9885 | 0.9698 | 0.9617 | 0.8451 | 0.9807 | 0.9791 (−0.0010 [−0.0018, −0.0002]) |
+| + siglip2_hud | 0.9880 | 0.9699 | 0.9596 | 0.7748 | 0.9828 | 0.9790 (−0.0011 [−0.0020, −0.0003]) |
+
+GridMask buys robustness only to grid occlusion and pays on every natural view. SigLIP 2 at 160 x 320 with this recipe underfits (0.936 alone, 5 points below the CNNs) and is the least sure on the test frames the ensemble is unsure about (agrees with it on 49% of them). No SigLIP folds 1-4; the queue went on to the held-out-cluster runs.
+
+**Round 25, Task 4: member combination under the balanced-prior rule** (`dj_r25_t4_rule_variants.py`, balanced-mix macro-F1, mean of full / zoom70 / centre-grey): mean of probabilities x pi^-alpha (v17) 0.9733 / **0.9741** / 0.9740 at alpha 0.5 / 0.75 / 1; mean of log-probabilities 0.9729 / 0.9737 / 0.9741; each member adjusted and renormalised first 0.9730 / 0.9737 / 0.9742. A plateau of ±0.0005 from alpha 0.75 to 1; the v17 rule stays.

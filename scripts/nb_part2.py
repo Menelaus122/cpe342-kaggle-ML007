@@ -547,7 +547,11 @@ For each backbone, every fold model (final EMA weights) predicts its held-out fo
 
 **Why HUD dropout.** Occluding parts of validation images shows that the first two models read mostly the on-screen HUD, above all the bottom control strip: with only the centre of the frame visible, fold-0 accuracy falls from 0.988 to 0.934 (PUBE Mobile 0.890). The test images the models are unsure about (crowds, dark frames, menus) often have no HUD. HUD dropout hides, with probability 0.5 per training image, the bottom strip, the top strip and corners, or all borders, or zooms into the central 60–75% (`task4.GPUAugment._hud`). On the same fold-0 validation images it keeps full-frame accuracy (0.9878 → 0.9872, difference inside noise) and raises centre-only accuracy to 0.961 (+0.027, 95% CI [+0.022, +0.033]; PUBE 0.944) and accuracy on a natural 70% centre zoom from 0.961 to 0.968 (+0.008, CI [+0.004, +0.012]). Averaging a normal and a HUD-dropout model is best or near-best on every view (`experiments/claude/cm_r19_t4_hud_eval.py`).
 
-Class-wise multipliers are tuned on the OOF blend for macro-F1 and kept only if they also help **nested** (chosen on four folds, scored on the fifth): in round 18 the in-sample gain of +0.0006 turned into −0.0002 nested. Two more backbones were tried and dropped on OOF evidence:
+Class-wise multipliers are tuned on the OOF blend for macro-F1 and kept only if they also help **nested** (chosen on four folds, scored on the fifth): in round 18 the in-sample gain of +0.0006 turned into −0.0002 nested.
+
+**Balanced-prior decision rule (v17).** Training is 39% 7-Eleven Knights, so the networks' posterior carries that prior and an ambiguous frame falls back to the largest class, while macro-F1 weighs the five classes equally. The final label is $\hat y=\arg\max_c p_c\,\pi_c^{-\alpha}$ with the training shares $\pi$ and $\alpha = 0.75$ (logit adjustment, Menon et al., 2021). $\alpha$ was fixed from training images only (`experiments/claude/cy_r23_t4_prior_temp.py`, `df_r25_t4_prior_stack.py`): on OOF subsamples where 7-Eleven Knights is 20% of the set, $\alpha = 0.75$ beats plain argmax in 98–100% of 200 draws (full frames 0.9875 → 0.9880, 70% zoom 0.9690 → 0.9703, HUD hidden 0.9567 → 0.9613); at the training mix it costs 0.0013 (full) to 0.0021 (zoom), and on HUD-less frames $\alpha$ = 0.25–0.5 gains even at the training mix. The rule is therefore a bet that the test class mix is flatter than training. No test label, test image or test prediction enters $\alpha$ or $\pi$; 949 test labels change against plain argmax, and the public score rose from 0.85035 to 0.85507 (about +0.024 on Task 4), far more than the simulated gain, which says most ambiguous test frames had been given to the largest class.
+
+Two more backbones were tried and dropped on OOF evidence:
 * EfficientNetV2-S diverged at lr 3e-4 (epoch-0 loss above uniform).
 * DINOv2 ViT-S/14 (self-supervised, at 154×308, lr 5e-5, wider zoom augmentation 0.7–1.3) reached only 0.9705 macro-F1 on fold 0, versus 0.986 / 0.985 for the two kept backbones. Adding it lowered the fold-0 ensemble at every weight tried (0.9878 → 0.9863 at 1/3 weight, 0.9874 at 0.2), and it was *less* confident on test images, not more. Its run was stopped after fold 0 (`outputs/preds/t4_dino_fold0.npz`).
 
@@ -591,6 +595,19 @@ print(f"OOF macro-F1 argmax {base4:.4f} -> with class multipliers {SCORE4:.4f} i
       f"| accuracy {(oof4.argmax(1) == y4).mean():.4f}")
 if macro_f1(y4, nest4) - base4 < 0.0005:   # keep the multipliers only if they survive the nested check
     W4, SCORE4 = np.ones(5), base4
+# Balanced-prior decision rule (logit adjustment, Menon et al., 2021): y = argmax_c p_c * pi_c^-alpha. Training is 39% 7-Eleven Knights,
+# so an ambiguous frame falls back to that class; macro-F1 weighs the five classes equally. alpha is fixed from training images only:
+# macro-F1 of the OOF predictions as they are, and re-weighted to a balanced 20%-per-class mix (each row weighted 0.2 / pi of its class).
+PRIOR4 = np.bincount(y4, minlength=5) / len(y4)
+ALPHA4 = 0.75
+w_bal4 = (0.2 / PRIOR4)[y4]
+display(pd.DataFrame([[a, macro_f1(y4, (oof4 * PRIOR4 ** -a).argmax(1)),
+                       f1_score(y4, (oof4 * PRIOR4 ** -a).argmax(1), average="macro", sample_weight=w_bal4)] for a in (0, 0.25, 0.5, 0.75, 1.0)],
+                     columns=["alpha", "macro-F1, training class mix", "macro-F1, balanced class mix"]).set_index("alpha").style.format("{:.4f}"))
+W4 = W4 * PRIOR4 ** -ALPHA4
+SCORE4 = macro_f1(y4, apply_class_weights(oof4, W4))
+print(f"decision rule: argmax p * pi^-{ALPHA4}; OOF macro-F1 {SCORE4:.4f} at the training mix, "
+      f"{f1_score(y4, apply_class_weights(oof4, W4), average='macro', sample_weight=w_bal4):.4f} at a balanced mix")
 pred4 = apply_class_weights(test4, W4)
 
 fig, axes = plt.subplots(1, 2, figsize=(11.5, 3.8))
@@ -605,7 +622,7 @@ for i, v in enumerate(pc4[::-1]):
     axes[1].text(v, i, f" {v:.4f}", va="center", fontsize=8.5)
 axes[1].set_xlim(0.9, 1.0); axes[1].set_title("Per-class F1 (OOF)")
 plt.tight_layout(); savefig(fig, "t4_confusion"); plt.show()
-summary.append(["Task 4", "macro-F1", SCORE4, f"{' + '.join(T4_TAGS)} 5-fold, GPU aug + Mixup/CutMix, EMA, h-flip TTA"])
+summary.append(["Task 4", "macro-F1", SCORE4, f"{' + '.join(T4_TAGS)} 5-fold, GPU aug + Mixup/CutMix, EMA, h-flip TTA, balanced-prior rule (alpha 0.75)"])
 """)
 code(r"""
 # Distribution-shift diagnostics: held-out train images (OOF) vs test images
