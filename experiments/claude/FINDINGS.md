@@ -1031,3 +1031,32 @@ Six − pair, paired bootstrap over rows (95% CI) and per-fold accuracy:
 * Decision: the six-backbone argmax ensemble goes into the pipeline (it was pre-registered in round 19b; the all-fold views confirm it). Whether the test gap is HUD-less frames remains a hypothesis: the gain on test is somewhere between 0 and the zoom/centre gains above.
 
 **v15 uploaded 2026-11-13: public LB 0.85032 (+0.00159 over v14).** Only the Task 4 column changed, so Task 4 rose by about +0.008 (if the LB is the mean of the five task scores). If the 548 rows moved by dropping the multipliers are net zero, the 701 rows moved by the new backbones gained about 207 net correct labels, +0.30 per changed row: between the out-of-fold rates on full frames (+0.03) and on the 70% zoom (+0.57), close to an even mix of the two. This supports the HUD hypothesis but is one noisy public-split measurement. Gap to the top (0.85787): 0.00755 ≈ +0.038 on one task.
+
+## Round 20 (2026-11-13): Task 4 blend rules, multi-crop inference, bigger / stronger HUD backbones (`cp_r20_t4_z75_views.py`, `cq_r20_t4_blend.py`, `cr_r20_t4_candidates.py`)
+Objective fixed in advance: mean of out-of-fold macro-F1 on full frames and on the 70% centre zoom (the HUD-free view without grey area; v15's LB gain fits an even mix of the two). All 31,546 training images, each predicted by the fold model that did not train on it; rule parameters chosen on four folds and scored on the fifth.
+
+| Rule (nested) | full | 70% zoom | centre only | objective vs v15 [95% CI], folds better |
+|---|---|---|---|---|
+| v15: mean of six | 0.9883 | 0.9705 | 0.9587 | — |
+| group weight on the four HUD models (picked 0.6–0.75) | −0.0003 | −0.0004 | −0.0002 | −0.0004 [−0.0006, −0.0001], 0/5 |
+| entropy gate (more HUD weight where the legacy pair's max-prob < τ) | −0.0003 | −0.0004 | −0.0002 | −0.0004 [−0.0007, −0.0000], 3/5 |
+| six free model weights (Powell) | −0.0005 | +0.0002 | +0.0012 | −0.0001 [−0.0005, +0.0003], 3/5 |
+| multi-crop: (1−b)·P(view) + b·P(central 75% zoom), with group weight | −0.0012 | −0.0001 | +0.0010 | −0.0006 [−0.0011, −0.0002], 0/5 |
+| multi-crop with the gate | −0.0007 | −0.0003 | +0.0003 | −0.0005 [−0.0009, −0.0001], 1/5 |
+| multi-crop with free weights | −0.0013 | −0.0020 | +0.0007 | −0.0016 [−0.0021, −0.0011], 0/5 |
+
+* In-sample, more weight on the HUD models trades full frames for HUD-free views almost one for one (w = 0.9: full −0.0010, zoom +0.0006); v15's equal mean (w = 2/3) is already on the plateau. A second, zoomed view costs full-frame accuracy from b = 0.1 on (0.9883 → 0.9879) and helps only the centre-only view: the HUD models already saw centre zooms in training. **Nothing beats the plain mean.**
+* PUBE Mobile ↔ Free Fried is 15–19% of the errors in every view (zoom 136 of 809; centre-only 221 of 1,152); the lowest recalls without HUD are Roblock (0.953 zoom) and FiveN (0.960). A perfect PUBE/FF specialist would add at most ~0.4% on the zoom view, so none was trained.
+* Fold-0 candidates as a seventh member (pass rule fixed in advance: objective CI > 0 and full ≥ −0.0005):
+
+| fold 0, macro-F1 | full | 70% zoom | centre only | objective |
+|---|---|---|---|---|
+| ConvNeXt-T HUD p=0.5 (cnxt_hud) | 0.9852 | 0.9632 | 0.9538 | 0.9742 |
+| ConvNeXt-S in12k HUD p=0.5 (cnxtS_hud) | 0.9872 | 0.9675 | 0.9593 | 0.9774 |
+| ConvNeXt-T HUD p=0.8 (cnxt_hud8) | 0.9832 | 0.9646 | 0.9565 | 0.9739 |
+| v15 six | 0.9887 | 0.9700 | 0.9590 | 0.9793 |
+| six + cnxtS_hud | 0.9892 | 0.9709 | 0.9607 | 0.9801 |
+| six + cnxt_hud8 | 0.9885 | 0.9706 | 0.9615 | 0.9795 |
+
+  Seven − six: cnxtS_hud objective +0.0008 [−0.0002, +0.0018], full +0.0005 [−0.0001, +0.0013] → **fail** (CI includes 0, though positive on every view); cnxt_hud8 +0.0002 [−0.0008, +0.0012] → fail. Stronger HUD dropout trades full-frame accuracy for little. ConvNeXt-S is the better single model on every view, but at batch 64 it overflows the 8 GB GPU into shared memory (~990 s per epoch vs ~120 s for Tiny): 5 folds + full would take ~16 h as is.
+* **No v16:** no rule or candidate passed, so the pipeline stays at v15. With Task 4 at ~0.87 on test against 0.97 on the HUD-free proxy, most of the remaining test gap is content these train-only proxies cannot simulate; the open TA questions (prior alignment, test-image-informed augmentation) are the remaining large levers.
