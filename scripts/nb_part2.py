@@ -102,6 +102,8 @@ T4_BACKBONES = {   # tag -> (timm model, input HxW) as trained by scripts/train_
     "cnxt22k_hud": ("convnext_tiny.fb_in22k", (160, 320)),
     "effv2_hud": ("tf_efficientnetv2_s.in21k_ft_in1k", (160, 320)),
     "deit3_hud": ("deit3_small_patch16_384.fb_in22k_ft_in1k", (192, 384)),
+    # round 21: a larger HUD-dropout ConvNeXt (trained with --grad-ckpt to fit an 8 GB GPU)
+    "cnxtS_hud": ("convnext_small.in12k_ft_in1k", (160, 320)),
 }
 fold_done = lambda tag: all((C.PRED_DIR / f"t4_{tag}_fold{f}.npz").exists() for f in range(N_FOLDS))
 if not fold_done("cnxt") and RUN_T4_TRAINING:
@@ -541,7 +543,7 @@ md(r"""
 For each backbone, every fold model (final EMA weights) predicts its held-out fold with h-flip TTA, which gives OOF probabilities. Test probabilities are the mean over the 5 folds × 2 views. The probabilities of all backbones are averaged (plain argmax):
 * **ConvNeXt-Tiny** (CNN, IN-12k) at 160×320;
 * **DeiT-III Small/16** (Vision Transformer, IN-22k) at 192×384, with position embeddings resampled to the 12×24 token grid;
-* **HUD-dropout versions** (round 19) of ConvNeXt-Tiny, ConvNeXt-Tiny IN-22k, EfficientNetV2-S IN-21k and DeiT-III-S.
+* **HUD-dropout versions** (round 19) of ConvNeXt-Tiny, ConvNeXt-Tiny IN-22k, EfficientNetV2-S IN-21k and DeiT-III-S, and (round 21) of the larger ConvNeXt-Small IN-12k.
 
 **Why HUD dropout.** Occluding parts of validation images shows that the first two models read mostly the on-screen HUD, above all the bottom control strip: with only the centre of the frame visible, fold-0 accuracy falls from 0.988 to 0.934 (PUBE Mobile 0.890). The test images the models are unsure about (crowds, dark frames, menus) often have no HUD. HUD dropout hides, with probability 0.5 per training image, the bottom strip, the top strip and corners, or all borders, or zooms into the central 60–75% (`task4.GPUAugment._hud`). On the same fold-0 validation images it keeps full-frame accuracy (0.9878 → 0.9872, difference inside noise) and raises centre-only accuracy to 0.961 (+0.027, 95% CI [+0.022, +0.033]; PUBE 0.944) and accuracy on a natural 70% centre zoom from 0.961 to 0.968 (+0.008, CI [+0.004, +0.012]). Averaging a normal and a HUD-dropout model is best or near-best on every view (`experiments/claude/cm_r19_t4_hud_eval.py`).
 
