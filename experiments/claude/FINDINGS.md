@@ -1310,4 +1310,28 @@ No class is over-predicted by more than 0.6 points, and the one that is slightly
 | 4 | frozen-feature probe at 10% (probe alone 0.9232 OOF) | under the v17 rule 0.9873 → 0.9879 at the training mix, 0.9885 → 0.9888 at a uniform mix | 340 (1.31%); predicted shares move by at most 0.001 |
 | 5 | none | no labels | 0 |
 
-Expected public-score change from the nested estimates: Task 2 +0.0012 to +0.0020 and Task 4 +0.0005 on one fifth of the score each, so about +0.0003 to +0.0005 overall, if the gains carry over to test (the Task 4 estimate is on simulated HUD loss, not on test frames).
+**Round 27, remaining queue items (2026-11-14 10:40).**
+
+* **Task 4, DINOv2-B fine-tuned, fold 0** (`vit_base_patch14_reg4_dinov2.lvd142m`, 196x392, lr 1.5e-5, layer decay 0.65, HUD dropout 0.5, 10 epochs, 89 minutes; `cv_r22_t4_eval.py dinov2_hud`). Alone 0.9403 full / 0.9050 zoom70 / 0.8836 HUD hidden, far below every member (validation macro-F1 was still rising, 0.9352 → 0.9392 in the last epoch: under-trained at this learning rate and decay). Added to the seven members under the v17 rule at a uniform mix: **−0.0003 [−0.0010, +0.0004]** (full −0.0000, zoom70 +0.0000, HUD hidden −0.0011). Fails; folds 1-4 not trained. With `cnxt_col` this closes the "new backbone" item: three candidates since v16 (Swin-T, colour-robust ConvNeXt-T, DINOv2-B) all lower the HUD-hidden score when added.
+* **Task 1, extra members under the v18 level 2** (`dt_r27_t1_members.py`), all four splits (nested delta, folds better):
+
+  | added to the nine members | pipeline folds | split 1 | split 2 | split 3 | mean |
+  |---|---|---|---|---|---|
+  | XGBoost tuned | −0.0001, 2/5 | −0.0001, 1/5 | −0.0004, 0/5 | +0.0002, 4/5 | −0.0001 |
+  | LightGBM reduced | −0.0006, 1/5 | +0.0000, 2/5 | −0.0000, 2/5 | +0.0006, 4/5 | +0.0000 |
+  | XGBoost tuned + LightGBM reduced | +0.0001, 1/5 | +0.0002, 4/5 | −0.0000, 2/5 | +0.0000, 2/5 | +0.0001 |
+  | XGBoost tuned + three reduced members | +0.0001, 2/5 | −0.0002, 1/5 | +0.0001, 3/5 | −0.0001, 3/5 | −0.0000 |
+
+  No set reaches 4/5 folds on more than one split, and no mean is above +0.0001. Fails.
+* **Task 1, 10-seed bag under the v18 level 2** (`dv_r27_t1_bag_l2.py`; test-like = the same validation rows with test-like missingness, rows re-weighted to the test's missing-cell rates):
+
+  | members | pipeline folds | split 1 | split 2 | split 3 | mean | test-like, mean |
+  |---|---|---|---|---|---|---|
+  | bag 3 | −0.0002, 3/5 | −0.0000, 3/5 | +0.0001, 2/5 | +0.0002, 3/5 | +0.0000 | −0.0001 |
+  | bag 5 | −0.0001, 3/5 | −0.0002, 1/5 | −0.0000, 2/5 | +0.0003, 4/5 | +0.0000 | −0.0005 |
+  | bag 10 | +0.0001, 3/5 | +0.0001, 3/5 | +0.0004, 4/5 | +0.0006, 4/5 | +0.0003 | −0.0002 |
+
+  The 10-seed bag has a positive mean (+0.0003) but is better in only 3/5 folds on two of the four splits, and it is worse under test-like missingness on three of the four (−0.0002, +0.0002, −0.0003, −0.0005). Same picture as round 14 under the logistic stacker (+0.0004, 3/5, test-like −0.0004). Fails the rule (>= 4/5 folds and test-like >= 0); Task 1 stays as in v18.
+* **Task 2, 10-seed bag**: running (`BAG_DIR=r27_bag by_r14_bag.py cv t2`, about 7 CPU hours), then `dw_r27_t2_bag_eval.py` scores bags of 3 / 5 / 10 seeds under the v19 level 2.
+
+Expected public-score change of v19 from the nested estimates: Task 2 +0.0012 to +0.0020 and Task 4 +0.0005 on one fifth of the score each, so about +0.0003 to +0.0005 overall, if the gains carry over to test (the Task 4 estimate is on simulated HUD loss, not on test frames).
