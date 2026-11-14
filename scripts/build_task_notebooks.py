@@ -316,8 +316,11 @@ def task_cells(k):
         md(section(7, "**Level 1:** three GBDTs with different tree-growth biases (LightGBM leaf-wise, XGBoost depth-wise, CatBoost "
                       "oblivious trees with native categoricals) and a multinomial logistic regression on Gaussian-rank features, all on "
                       "identical folds. **Level 2:** a regularised multinomial logistic-regression stacker on the level-1 OOF "
-                      "log-probabilities, itself cross-validated on the same folds. **Post-processing:** class-wise multipliers "
-                      r"$\hat y=\arg\max_c w_c P_{ic}$ tuned on the stacked OOF probabilities for macro-$F_1$."))
+                      "log-probabilities, itself cross-validated on the same folds. **Generative member:** a naive Bayes classifier with "
+                      "kernel-density marginals (the features are close to independent given the segment), fitted on training rows "
+                      "only and out-of-fold on the same folds; its probabilities are averaged with the stacker's, with the weight "
+                      "chosen on the OOF rows. **Post-processing:** class-wise multipliers "
+                      r"$\hat y=\arg\max_c w_c P_{ic}$ tuned on the blended OOF probabilities for macro-$F_1$."))
     elif k == 3:
         md(section(7, "Level-1 regressors are blended with non-negative weights that minimise total absolute error (fitted out-of-fold), "
                       "followed by a median-consistent zero gate and one scale factor."))

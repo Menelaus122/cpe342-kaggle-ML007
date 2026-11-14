@@ -151,6 +151,7 @@ def nested_w(Ps, fl):
 rng = np.random.default_rng(0)
 boot = [rng.integers(0, len(y), len(y)) for _ in range(1000)]
 splits = [("pipeline folds", folds)] + [(f"split seed {s}", list(StratifiedKFold(5, shuffle=True, random_state=s).split(M[0], y))) for s in (1, 2, 3)]
+splits = [s for i, s in enumerate(splits) if str(i) in __import__("os").environ.get("SPLITS", "0,1,2,3").split(",")]  # resume: SPLITS=1,2,3
 summary = {}
 for label, fl in splits:
     fo = np.zeros(len(y), int)
@@ -173,6 +174,6 @@ for label, fl in splits:
         summary.setdefault(k, []).append((d, sum(x > 0 for x in pf)))
         print(f"  {k:28s} {mf1(y, p):.4f}  delta {d:+.4f} [{np.quantile(bs, .025):+.4f}, {np.quantile(bs, .975):+.4f}]  folds +{sum(x > 0 for x in pf)}/5 "
               f"({' '.join(f'{x:+.4f}' for x in pf)})  labels changed {np.mean(p != base):.2%}", flush=True)
-print("\nmean delta over the 4 splits (folds better, per split):")
+print("\nmean delta over the splits run (folds better, per split):")
 for k, v in summary.items():
     print(f"  {k:28s} {np.mean([d for d, _ in v]):+.4f}  ({' '.join(str(n) + '/5' for _, n in v)})")

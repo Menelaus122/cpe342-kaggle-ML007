@@ -1283,3 +1283,31 @@ No class is over-predicted by more than 0.6 points, and the one that is slightly
 * **Task 4 probe member** (`scripts/train_task4_probe.py`): folds 0-3 fitted (full-frame accuracy 0.931-0.933), fold 4 and the full fit missing.
 * **Task 4, colour-robust ConvNeXt-Tiny** (192x384, greyscale 0.3, colour jitter p 0.8 with 1.6x ranges, HUD dropout 0.6; new options `--p-gray`, `--p-jitter`, `--jitter-gain` in `scripts/train_task4.py`), fold 0: stopped after epoch 2 of 10 (validation macro-F1 0.9474; about 225 s per epoch). DINOv2-B fine-tuning (196x392, lr 1.5e-5, layer decay 0.65) not started.
 * **Task 3, seeds averaged in THB**: implemented in `scripts/nb_part2.py` (7.3 and the final refit); notebooks not rebuilt yet.
+
+**Round 27, resumed (2026-11-14 08:10; one GPU job and one CPU job at a time).**
+
+* **Task 2, stack blended with the KDE naive Bayes: the three other stacker splits** (`SPLITS=1,2,3 dp_r27_t2_kde_blend.py`; nested deltas against the stack with nested multipliers, folds better out of 5):
+
+  | level 2 | pipeline folds | split 1 | split 2 | split 3 | mean |
+  |---|---|---|---|---|---|
+  | 0.5 stack + 0.5 KDE NB | +0.0011, 5/5 | +0.0010, 4/5 | +0.0012, 5/5 | +0.0011, 4/5 | +0.0011 |
+  | 0.7 stack + 0.3 KDE NB | +0.0005, 4/5 | +0.0009, 4/5 | +0.0006, 4/5 | +0.0007, 4/5 | +0.0007 |
+  | weight chosen nested | +0.0012, 4/5 | +0.0020, 5/5 | +0.0014, 4/5 | +0.0020, 4/5 | +0.0017 |
+  | geometric 0.5 / 0.5 | +0.0009, 4/5 | +0.0015, 5/5 | +0.0005, 4/5 | +0.0012, 4/5 | +0.0010 |
+  | KDE NB as a fifth stack member | −0.0001, 2/5 | +0.0005, 4/5 | +0.0002, 4/5 | +0.0009, 4/5 | +0.0004 |
+
+  The 95% CI of the fixed 0.5 blend is above zero on every split ([+0.0002, +0.0021], [+0.0001, +0.0020], [+0.0003, +0.0021], [+0.0002, +0.0020]), and of the nested weight too ([+0.0001, +0.0022], [+0.0010, +0.0030], [+0.0004, +0.0024], [+0.0009, +0.0030]). The nested weight is 0.3-0.5 for the stack in every fold of every split. Passes. In the pipeline (`nb_part2.py` 7.2): the KDE weight is chosen on the OOF rows from {0, 0.1, ..., 0.7} together with the class multipliers, the procedure measured in the "weight chosen nested" row; the KDE member's test probabilities come from a fit on all training rows.
+* **Task 4 probe member**: fold 4 fitted (full-frame accuracy 0.936) and the full fit done; all six cache files exist, so `HAS_PROBE4` is true in the notebook.
+* **Task 4, colour-robust ConvNeXt-Tiny, fold 0** (`cv_r22_t4_eval.py cnxt_col`; the script now also prints the round 27 criterion: uniform class mix, v17 rule, mean over full + zoom70 + HUD hidden). Alone 0.9822 full / 0.9595 zoom70 / 0.9490 HUD hidden (`cnxt_hud`: 0.9852 / 0.9632 / 0.9538); it is better only on synthetic darkening (gamma 3.5: 0.9257 vs 0.9093; gain 0.15: 0.9644 vs 0.9542). Added to the seven members under the v17 rule at a uniform mix: **−0.0009 [−0.0019, +0.0001]** (full −0.0004, zoom70 −0.0003, HUD hidden −0.0021). Fails; folds 1-4 not trained. Stronger colour augmentation costs accuracy on the views that imitate the test frames, and round 18 already found no brightness / colour effect on test confidence.
+
+**v19 built (2026-11-14 09:37; `submission_v19.csv` = `submission.csv`, not uploaded yet).** Master notebook and `task2`, `task3`, `task4` notebooks rebuilt and executed (`task1`, `task5` sources unchanged); the file joined from the task notebooks is identical to the master notebook's file in every column.
+
+| task | change | OOF v18 → v19 | test rows changed vs v18 |
+|---|---|---|---|
+| 1 | none | 0.8387 | 0 |
+| 2 | stacker averaged with the KDE naive Bayes; KDE weight chosen on OOF = 0.6 (in-sample macro-F1 by weight 0 … 0.7: 0.7568, 0.7570, 0.7574, 0.7577, 0.7579, 0.7581, 0.7584, 0.7583); multipliers 0.875 / 1.025 / 1.04 / 1.06 | 0.7568 → 0.7584 (in-sample for weight and multipliers; nested 0.7564 → 0.7576) | 645 (2.49%); predicted shares 0.420 / 0.251 / 0.181 / 0.148 → 0.412 / 0.253 / 0.193 / 0.142 |
+| 3 | seeds averaged in THB | 0.7946 → 0.7946 | 12,729 values move; sum of absolute changes 0.016% of the total; zero share 0.5003 unchanged |
+| 4 | frozen-feature probe at 10% (probe alone 0.9232 OOF) | under the v17 rule 0.9873 → 0.9879 at the training mix, 0.9885 → 0.9888 at a uniform mix | 340 (1.31%); predicted shares move by at most 0.001 |
+| 5 | none | no labels | 0 |
+
+Expected public-score change from the nested estimates: Task 2 +0.0012 to +0.0020 and Task 4 +0.0005 on one fifth of the score each, so about +0.0003 to +0.0005 overall, if the gains carry over to test (the Task 4 estimate is on simulated HUD loss, not on test frames).

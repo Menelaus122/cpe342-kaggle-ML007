@@ -416,12 +416,26 @@ def stack_multi(models, y, folds, C_=0.5):
     final = LogisticRegression(C=C_, max_iter=3000).fit(S, y)
     return oof, final.predict_proba(St), final
 
-stack2_oof, stack2_test, STACKER2 = stack_multi(m2, y2, folds2)
-W2, SCORE2 = optimize_class_weights(y2, stack2_oof)
+lr2_oof, lr2_test, STACKER2 = stack_multi(m2, y2, folds2)
+# Generative member (round 27): KDE naive Bayes fitted on training rows only (out-of-fold on the same folds; all training rows for
+# test). As a fifth stacker input it adds little, but averaged with the stacker's probabilities it does: the two make different
+# errors. The KDE weight is chosen on the OOF rows together with the class multipliers. Nested (weight and multipliers from 4 folds,
+# scored on the 5th), against the stacker with nested multipliers: +0.0012 on these folds and +0.0020 / +0.0014 / +0.0020 on three
+# other stacker splits, better in 4 or 5 of 5 folds each time (experiments/claude/dp_r27_t2_kde_blend.py).
+kde2 = cached("t2_kde_nb", lambda: task2.kde_nb_cv(*task2.load(), y2, folds2))
+mix2 = lambda p_stack, p_kde, w=None: (1 - (KDE_W2 if w is None else w)) * p_stack + (KDE_W2 if w is None else w) * p_kde
+kde_grid2 = {w: optimize_class_weights(y2, mix2(lr2_oof, kde2["oof"], w)) for w in (0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0)}
+KDE_W2 = max(kde_grid2, key=lambda w: kde_grid2[w][1])
+stack2_oof, stack2_test = mix2(lr2_oof, kde2["oof"]), mix2(lr2_test, kde2["test"])
+W2, SCORE2 = kde_grid2[KDE_W2]
+print("KDE weight -> macro-F1 with class multipliers (in-sample):", {w: round(s_, 4) for w, (_, s_) in sorted(kde_grid2.items())}, "-> chosen", KDE_W2)
 rows = [[k, macro_f1(y2, v["oof"].argmax(1))] for k, v in m2.items()]
 rows += [["Mean of probabilities", macro_f1(y2, np.mean([v["oof"] for v in m2.values()], 0).argmax(1))],
-         ["LogReg stacker (OOF)", macro_f1(y2, stack2_oof.argmax(1))],
-         ["Stacker + class weights", SCORE2]]
+         ["LogReg stacker (OOF)", macro_f1(y2, lr2_oof.argmax(1))],
+         ["LogReg stacker + class weights", kde_grid2[0.0][1]],
+         ["KDE naive Bayes (OOF)", macro_f1(y2, kde2["oof"].argmax(1))],
+         [f"{1 - KDE_W2:.1f} stacker + {KDE_W2:.1f} KDE naive Bayes", macro_f1(y2, stack2_oof.argmax(1))],
+         [f"{1 - KDE_W2:.1f} stacker + {KDE_W2:.1f} KDE NB + class weights", SCORE2]]
 display(pd.DataFrame(rows, columns=["model", "macro-F1"]).set_index("model").style.format("{:.4f}").highlight_max(props="font-weight:bold"))
 print("class-wise decision multipliers w_c:", dict(zip(seg_names, np.round(W2, 3))))
 pred2 = apply_class_weights(stack2_test, W2)
@@ -436,7 +450,7 @@ for i, v in enumerate(per_cls):
     axes[1].text(i, v, f"{v:.3f}", ha="center", va="bottom", fontsize=8.5)
 axes[1].set_ylim(0, 1); axes[1].set_title("Per-segment F1")
 plt.tight_layout(); savefig(fig, "t2_confusion"); plt.show()
-summary.append(["Task 2", "macro-F1", SCORE2, "4 L1 models -> multinomial stacker -> class multipliers"])
+summary.append(["Task 2", "macro-F1", SCORE2, "4 L1 models -> multinomial stacker, averaged with a KDE naive Bayes -> class multipliers"])
 """)
 md(r"""
 The confusion matrix mirrors the 2×2 design. Almost all errors fall between segments that differ in **only one** latent factor:
@@ -842,7 +856,7 @@ f2m["XGBoost"] = cached("t2_xgb_full", lambda: refit_full("xgb", "multiclass", P
 f2m["CatBoost"] = cached("t2_cat_full", lambda: refit_full("cat", "multiclass", P2_cat, X2, y2, X2_test, folds2, cat_cols=cat2, name="T2 cat"))
 f2m["LogReg"] = cached("t2_lr_full", lambda: refit_full_sklearn(make_lr2, "multiclass", X2[num2].values, y2, X2_test[num2].values))
 St2 = np.column_stack([np.log(np.clip(blend_full(m2[k]["test"], f2m[k]["test"]), 1e-6, 1)) for k in m2])
-pred2_final = apply_class_weights(STACKER2.predict_proba(St2), W2)
+pred2_final = apply_class_weights(mix2(STACKER2.predict_proba(St2), kde2["test"]), W2)
 changes.append(["Task 2", "labels changed", np.mean(pred2_final != pred2), ""])
 
 # ---- Task 3
@@ -1171,7 +1185,7 @@ md(r"""
 | Task | Key insight | What moved the score |
 |---|---|---|
 | 1 Anti-cheat | Noisy additive signal; recall-weighted metric; test rows have fewer missing values | Cost-sensitive GBDTs (`scale_pos_weight` tuned) → 5-model stack → **threshold moving** on OOF (optimum inside a flat one-SE band) |
-| 2 Segmentation | 2×2 latent design (engagement × spending) | **Noise-averaging latent indices**, ordinal tiers; stack + **class-wise multipliers** |
+| 2 Segmentation | 2×2 latent design (engagement × spending) | **Noise-averaging latent indices**, ordinal tiers; stack averaged with a **KDE naive Bayes** + **class-wise multipliers** |
 | 3 Spending | NMAE ⇔ total absolute error ⇒ predict the **median**; spending ≈ history × segment factor × noise | **Data repair** (exact row identities, rule-based segment), **ratio-target hurdles** (LightGBM / XGBoost / CatBoost) with mixture-median read-out, L1 GBDTs on raw THB; OOF L1 blend, median-consistent zero gate, scale |
 | 4 Game title | Corrupted screenshots, 2:1 aspect; shifted test set | Aspect-preserving inputs, **GPU corruption-matched augmentation**, Mixup/CutMix, EMA, TTA; **CNN + ViT ensemble** for shift robustness |
 | 5 Security | Anomalies are **separate populations**: each family sits beyond an empty gap in some behaviour | **1-D density-gap detector** (expected-in-gap statistic) finds 6 families with no hand-set threshold; a second scan of the derived change features finds nothing outside them |

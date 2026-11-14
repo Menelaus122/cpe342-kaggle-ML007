@@ -36,7 +36,9 @@ ARCH = {"cnxt_hud": ("convnext_tiny.in12k_ft_in1k", (160, 320)), "cnxt_grid": ("
         "cnxt": ("convnext_tiny.in12k_ft_in1k", (160, 320)), "deit3": ("deit3_small_patch16_384.fb_in22k_ft_in1k", (192, 384)),
         "cnxt22k_hud": ("convnext_tiny.fb_in22k", (160, 320)), "effv2_hud": ("tf_efficientnetv2_s.in21k_ft_in1k", (160, 320)),
         "deit3_hud": ("deit3_small_patch16_384.fb_in22k_ft_in1k", (192, 384)),
-        "swinT_hud": ("swin_tiny_patch4_window7_224.ms_in22k_ft_in1k", (224, 448))}
+        "swinT_hud": ("swin_tiny_patch4_window7_224.ms_in22k_ft_in1k", (224, 448)),
+        "cnxt_col": ("convnext_tiny.in12k_ft_in1k", (192, 384)),                     # round 27: grey 0.3, colour jitter 0.8 x gain 1.6
+        "dinov2_hud": ("vit_base_patch14_reg4_dinov2.lvd142m", (196, 392))}          # round 27: DINOv2-B fine-tuned, layer decay 0.65
 ENS = ["cnxt", "deit3", "cnxt_hud", "cnxt22k_hud", "effv2_hud", "deit3_hud", "cnxtS_hud"]
 OUT = Path("experiments/claude/outputs/r22_views")
 OUT.mkdir(parents=True, exist_ok=True)
@@ -161,6 +163,14 @@ for c in [c for c in CANDS if c in P]:
         d = [np.mean([f(b[v], i) - f(a[v], i) for v in OBJ]) for i in boot]
         print(f"  ensemble + {c} minus ensemble, {label}: objective {pt:+.4f} [{np.quantile(d, .025):+.4f}, {np.quantile(d, .975):+.4f}]; "
               f"labels changed full {np.mean(a['full'] != b['full']):.3%}, zoom70 {np.mean(a['zoom70'] != b['zoom70']):.3%}")
+    # Round 27 criterion: mean gain over full + zoom70 + HUD hidden at a uniform class mix, under the v17 rule.
+    V3 = OBJ + ["centre_grey"]
+    a3, b3 = {v: rule(ens, v) for v in V3}, {v: rule(ens + [c], v) for v in V3}
+    f3 = lambda pred, i: f1_score(yv[i], pred[i], average="macro", sample_weight=wb[i])
+    per = [f3(b3[v], allr) - f3(a3[v], allr) for v in V3]
+    d3 = [np.mean([f3(b3[v], i) - f3(a3[v], i) for v in V3]) for i in boot]
+    print(f"  ensemble + {c} minus ensemble, uniform mix, three views: {np.mean(per):+.4f} [{np.quantile(d3, .025):+.4f}, {np.quantile(d3, .975):+.4f}] "
+          f"(full {per[0]:+.4f}, zoom70 {per[1]:+.4f}, HUD hidden {per[2]:+.4f})")
 
 # Label-free diagnostic on test images (fold-0 models' test probabilities; reported only, never used to decide: being confident on
 # a test image is not the same as being right on it).
