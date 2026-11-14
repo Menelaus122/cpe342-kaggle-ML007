@@ -39,8 +39,11 @@ ARCH = {"cnxt_hud": ("convnext_tiny.in12k_ft_in1k", (160, 320)), "cnxt_grid": ("
         "swinT_hud": ("swin_tiny_patch4_window7_224.ms_in22k_ft_in1k", (224, 448)),
         "cnxt_col": ("convnext_tiny.in12k_ft_in1k", (192, 384)),                     # round 27: grey 0.3, colour jitter 0.8 x gain 1.6
         "dinov2_hud": ("vit_base_patch14_reg4_dinov2.lvd142m", (196, 392)),          # round 27: DINOv2-B fine-tuned, layer decay 0.65
-        "dinov2_v2": ("vit_base_patch14_reg4_dinov2.lvd142m", (126, 238))}           # round 28: lr 5e-5, layer decay 0.8, 15 epochs, native aspect
-ENS = ["cnxt", "deit3", "cnxt_hud", "cnxt22k_hud", "effv2_hud", "deit3_hud", "cnxtS_hud"]
+        "dinov2_v2": ("vit_base_patch14_reg4_dinov2.lvd142m", (126, 238)),           # round 28: lr 5e-5, layer decay 0.8, 15 epochs, native aspect
+        "eva02B": ("eva02_base_patch14_448.mim_in22k_ft_in22k_in1k", (126, 238)),    # round 28: the dinov2_v2 recipe
+        "siglip2_v2": ("vit_base_patch16_siglip_224.v2_webli", (128, 240))}          # round 28: the dinov2_v2 recipe
+ENS = ["cnxt", "deit3", "cnxt_hud", "cnxt22k_hud", "effv2_hud", "deit3_hud", "cnxtS_hud", "dinov2_v2"]      # v20: eight members
+MEMBER_W = {"dinov2_v2": 3.0}                                        # v20: the fine-tuned DINOv2 counts three times
 OUT = Path("experiments/claude/outputs/r22_views")
 OUT.mkdir(parents=True, exist_ok=True)
 OBJ = ["full", "zoom70"]
@@ -115,7 +118,7 @@ for t in P:
     P[t]["real_hard"] = P[t]["full"]
 mf1 = lambda yy, p: f1_score(yy, p.argmax(1), average="macro")
 ens = [t for t in ENS if t in P]
-avg = lambda ts, v: np.mean([P[t][v] for t in ts], 0)
+avg = lambda ts, v: np.sum([MEMBER_W.get(t, 1.0) * P[t][v] for t in ts], 0) / sum(MEMBER_W.get(t, 1.0) for t in ts)
 cols = list(VIEWS) + ["real_hard"]
 score = lambda ts, v: mf1(yv[hard], avg(ts, v)[hard]) if v == "real_hard" else mf1(yv, avg(ts, v))
 print(f"fold-0 validation images {len(va)}; real dark/low-contrast subset {hard.sum()}; current ensemble = {'+'.join(ens)}")
@@ -165,12 +168,15 @@ for c in [c for c in CANDS if c in P]:
         print(f"  ensemble + {c} minus ensemble, {label}: objective {pt:+.4f} [{np.quantile(d, .025):+.4f}, {np.quantile(d, .975):+.4f}]; "
               f"labels changed full {np.mean(a['full'] != b['full']):.3%}, zoom70 {np.mean(a['zoom70'] != b['zoom70']):.3%}")
     # Round 27 criterion: mean gain over full + zoom70 + HUD hidden at a uniform class mix, under the v17 rule.
+    # Since v19 the pipeline mixes in the frozen-feature probe at 10%; the criterion is scored on that fused ensemble.
     V3 = OBJ + ["centre_grey"]
-    a3, b3 = {v: rule(ens, v) for v in V3}, {v: rule(ens + [c], v) for v in V3}
+    zp = np.load("experiments/claude/outputs/r27/t4_probe_views.npz")
+    fus = lambda ts, v: ((0.9 * avg(ts, v) + 0.1 * zp[f"probe-aug_{v}"][va]) * pi ** -0.75).argmax(1)
+    a3, b3 = {v: fus(ens, v) for v in V3}, {v: fus(ens + [c], v) for v in V3}
     f3 = lambda pred, i: f1_score(yv[i], pred[i], average="macro", sample_weight=wb[i])
     per = [f3(b3[v], allr) - f3(a3[v], allr) for v in V3]
     d3 = [np.mean([f3(b3[v], i) - f3(a3[v], i) for v in V3]) for i in boot]
-    print(f"  ensemble + {c} minus ensemble, uniform mix, three views: {np.mean(per):+.4f} [{np.quantile(d3, .025):+.4f}, {np.quantile(d3, .975):+.4f}] "
+    print(f"  (ensemble + {c}) + 10% probe minus ensemble + 10% probe, uniform mix, three views: {np.mean(per):+.4f} [{np.quantile(d3, .025):+.4f}, {np.quantile(d3, .975):+.4f}] "
           f"(full {per[0]:+.4f}, zoom70 {per[1]:+.4f}, HUD hidden {per[2]:+.4f})")
 
 # Label-free diagnostic on test images (fold-0 models' test probabilities; reported only, never used to decide: being confident on

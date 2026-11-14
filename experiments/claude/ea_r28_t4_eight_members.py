@@ -125,3 +125,25 @@ for va in folds:
         nested[v][va] = cands[best][v][va]
 report("eight + probe, probe weight nested", nested, f" | chosen {chosen}")
 print("  in-sample by probe weight: " + "  ".join(f"{lam}: {obj(allr, cands[lam]) - obj(allr, base):+.4f}" for lam in LAMS))
+
+# Weight of the new member inside the mean (1 = equal weights), nested: chosen on 4 folds, scored on the 5th. Deltas against the
+# pipeline with the new member at equal weight, to see whether the extra weight itself is worth anything.
+WS = [1.0, 1.5, 2.0, 3.0, 4.0]
+cw = {w: fused(TAGS + [NEW], 0.1, w) for w in WS}
+nested, chosen = {v: np.zeros(len(y), int) for v in VIEWS}, []
+for va in folds:
+    tr = np.setdiff1d(allr, va)
+    best = max(WS, key=lambda w: obj(tr, cw[w]))
+    chosen.append(best)
+    for v in VIEWS:
+        nested[v][va] = cw[best][v][va]
+print("\nweight of the new member (probe 10%): in-sample delta against v19 by weight: " + "  ".join(f"{w}: {obj(allr, cw[w]) - obj(allr, base):+.4f}" for w in WS))
+report("new member weight nested (against v19)", nested, f" | chosen {chosen}")
+eq = cw[1.0]
+d = obj(allr, nested) - obj(allr, eq)
+bs = [obj(i, nested) - obj(i, eq) for i in boot]
+pf = [obj(va, nested) - obj(va, eq) for va in folds]
+per = [bal(allr, nested[v]) - bal(allr, eq[v]) for v in VIEWS]
+tm = np.mean([f1_score(y, nested[v], average="macro") - f1_score(y, eq[v], average="macro") for v in VIEWS])
+print(f"  nested weight minus equal weight: {d:+.4f} [{np.quantile(bs, .025):+.4f}, {np.quantile(bs, .975):+.4f}] folds +{sum(x > 0 for x in pf)}/5 "
+      f"({' '.join(f'{x:+.4f}' for x in pf)}) | full {per[0]:+.4f} zoom70 {per[1]:+.4f} HUD hidden {per[2]:+.4f} | training mix {tm:+.4f}")

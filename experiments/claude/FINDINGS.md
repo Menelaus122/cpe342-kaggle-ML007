@@ -1398,5 +1398,24 @@ Seed noise of a member (0.0002-0.0004) is far below the level-2 resolution, and 
 
 * Alone it beats the seven-member ensemble on zoomed frames and on every synthetic corruption no model was trained on (dark, 75% hidden): the most robust single model so far.
 * Added to the seven under the v17 rule at a uniform mix, three views: **+0.0012 [+0.0003, +0.0022]** (full +0.0002, zoom70 +0.0029, HUD hidden +0.0005); at the training mix (full + zoom70) +0.0017 [+0.0008, +0.0028]. First candidate since ConvNeXt-Small whose CI is above zero. Passes; folds 1-4 and the full-data model are training (about 55 minutes each).
-* The full-data model and folds 1-4 are queued on the GPU; `ea_r28_t4_eight_members.py` then scores the eight members + probe on all folds before anything is built.
+* **All five folds** (`ea_r28_t4_eight_members.py`; fold macro-F1 0.9869 / 0.9868 / 0.9872 / 0.9857 / 0.9856, OOF 0.9864; all 31,546 training images out of fold, uniform class mix, v17 rule):
+
+  | | full | zoom70 | HUD hidden | mean |
+  |---|---|---|---|---|
+  | dinov2_v2 alone | 0.9860 | 0.9725 | 0.9539 | 0.9708 |
+  | seven members | 0.9885 | 0.9714 | 0.9623 | 0.9741 |
+  | v19: seven + 10% probe | 0.9888 | 0.9721 | 0.9627 | 0.9745 |
+  | eight members | 0.9889 | 0.9736 | 0.9637 | 0.9754 |
+  | eight + 10% probe | 0.9896 | 0.9743 | 0.9640 | 0.9760 |
+
+  | against v19 | delta [95% CI] | folds | full / zoom70 / HUD hidden | training mix |
+  |---|---|---|---|---|
+  | eight + 10% probe | **+0.0015 [+0.0011, +0.0019]** | 5/5 | +0.0008 / +0.0023 / +0.0013 | +0.0014 |
+  | eight, no probe | +0.0009 [+0.0004, +0.0014] | 5/5 | +0.0001 / +0.0016 / +0.0010 | +0.0009 |
+  | eight + probe, probe weight nested (picks 0.1 in every fold) | +0.0015 [+0.0011, +0.0019] | 5/5 | | |
+  | eight + 10% probe, weight of the new member nested (picks 4, 4, 3, 3, 4) | **+0.0021 [+0.0013, +0.0028]** | 5/5 | +0.0007 / +0.0039 / +0.0017 | +0.0020 |
+
+  The nested member weight against equal weights: +0.0006 [+0.0001, +0.0011], 5/5 folds (full −0.0001, zoom70 +0.0016, HUD hidden +0.0004); in-sample the gain over v19 by weight is +0.0015 (1), +0.0018 (1.5), +0.0020 (2), +0.0022 (3), +0.0022 (4). The probe keeps its place next to a fine-tuned DINOv2 (with it +0.0015, without it +0.0009).
+* **v20 built (2026-11-14 20:36; `submission_v20.csv` = `submission.csv`, not uploaded yet).** `nb_part2.py`: `dinov2_v2` in `T4_BACKBONES`, `T4_MEMBER_W = {"dinov2_v2": 3.0}` (the lower end of the plateau), weighted mean in 7.4 and in the Train+Val refit; master and `task4` notebooks re-executed, the other task notebooks unchanged. OOF in the notebook: equal-weight average 0.9888, member weights 0.9891, + probe 0.9896 (argmax); under the rule 0.9879 → 0.9886 at the training mix and 0.9888 → 0.9895 at a balanced mix. Test: 769 Task 4 labels change against v19 (2.97%); predicted shares 0.147 / 0.262 / 0.149 / 0.248 / 0.194 → 0.142 / 0.271 / 0.144 / 0.244 / 0.198; Tasks 1, 2, 3, 5 identical (0 rows). Expected from the nested estimate alone: +0.0021 on Task 4 = +0.0004 on the score; v19's probe transferred several times its estimate, so the real change may be larger, in either direction.
+* **v20 = 0.85948, +0.00325 over v19** (uploaded 2026-11-15; snapshot `versions/v20_LB0.85948/`). Only Task 4 changed, so this is about +0.016 on Task 4 from 769 changed labels: roughly +420 net correct, i.e. at least ~595 of the 769 changes fixed an error. The nested estimate was +0.0021 on Task 4, eight times too small. Two uploads in a row (probe, DINOv2) have now transferred far more than the full / zoom / HUD-hidden proxies predict, in the direction the proxies give. What the proxies rank correctly but under-weight is robustness to content the training set does not cover: on the synthetic corruptions no model trained on (gamma 3.5, 75% hidden) DINOv2 led by 2 to 5 points, while on the three proxy views it led by 0.3. Leaderboard arithmetic: 5 x 0.85948 = 4.297; with T1 0.85, T2 0.757, T3 0.795, T5 0.99 this puts Task 4 at about 0.905. Top of the leaderboard 0.86750: 0.008 away = 0.040 on one task.
 * Which of the three changes did it (learning rate 1.5e-5 → 5e-5, layer decay 0.65 → 0.8, 10 → 15 epochs with 2 warm-up, 196x392 → 126x238) is not separated; the round 27 run was under-trained, so the recipe is the likely cause, not the aspect ratio.

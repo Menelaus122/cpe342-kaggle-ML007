@@ -241,7 +241,8 @@ class GPUAugment:
 # ImageNet-normalised tensors everywhere; for these models a forward pre-hook maps them to the model's own mean/std.
 # Older members (incl. EfficientNetV2 and EVA02, fine-tuned on ImageNet-normalised input) are deliberately left as trained.
 NATIVE_NORM = {"vit_base_patch16_siglip_224.v2_webli", "vit_base_patch16_siglip_224.webli",
-               "eva02_base_patch16_clip_224.merged2b", "vit_base_patch16_clip_224.openai"}
+               "eva02_base_patch16_clip_224.merged2b", "vit_base_patch16_clip_224.openai",
+               "eva02_base_patch14_448.mim_in22k_ft_in22k_in1k"}       # round 28 (CLIP mean / std in its pre-trained config)
 
 
 def create_model(name, num_classes=5, pretrained=True, drop_path=0.1, img_size=None):

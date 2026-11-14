@@ -591,10 +591,12 @@ plt.tight_layout(); savefig(fig, "t3_calibration"); plt.show()
 
 md(r"""
 ## 7.4 Task 4: Game title detection (macro-F1)
-For each backbone, every fold model (final EMA weights) predicts its held-out fold with h-flip TTA, which gives OOF probabilities. Test probabilities are the mean over the 5 folds × 2 views. The probabilities of all backbones are averaged (plain argmax):
+For each backbone, every fold model (final EMA weights) predicts its held-out fold with h-flip TTA, which gives OOF probabilities. Test probabilities are the mean over the 5 folds × 2 views. The probabilities of all backbones are averaged; the decision rule is described below:
 * **ConvNeXt-Tiny** (CNN, IN-12k) at 160×320;
 * **DeiT-III Small/16** (Vision Transformer, IN-22k) at 192×384, with position embeddings resampled to the 12×24 token grid;
 * **HUD-dropout versions** (round 19) of ConvNeXt-Tiny, ConvNeXt-Tiny IN-22k, EfficientNetV2-S IN-21k and DeiT-III-S, and (round 21) of the larger ConvNeXt-Small IN-12k.
+* **DINOv2 ViT-B/14** (self-supervised, LVD-142M; round 28) fine-tuned at 126×238, the images' own aspect ratio (9×17 patches), with lr 5e-5, layer-wise lr decay 0.8, 2 warm-up + 13 cosine epochs and HUD dropout. Alone it is the most robust model on zoomed, darkened and partly hidden frames (fold 0: 70% zoom 0.974 against 0.971 for the other seven together), and it counts three times in the average (weight chosen nested on full / zoom / HUD-hidden views: +0.0006 over equal weights, 5/5 folds). An earlier run of the same backbone with lr 1.5e-5 and decay 0.65 for 10 epochs reached only 0.940: the recipe, not the backbone, was the problem.
+* A **logistic probe on frozen CLIP + DINOv2 + SigLIP 2 features** (round 27) is mixed in at 10%.
 
 **Why HUD dropout.** Occluding parts of validation images shows that the first two models read mostly the on-screen HUD, above all the bottom control strip: with only the centre of the frame visible, fold-0 accuracy falls from 0.988 to 0.934 (PUBE Mobile 0.890). The test images the models are unsure about (crowds, dark frames, menus) often have no HUD. HUD dropout hides, with probability 0.5 per training image, the bottom strip, the top strip and corners, or all borders, or zooms into the central 60–75% (`task4.GPUAugment._hud`). On the same fold-0 validation images it keeps full-frame accuracy (0.9878 → 0.9872, difference inside noise) and raises centre-only accuracy to 0.961 (+0.027, 95% CI [+0.022, +0.033]; PUBE 0.944) and accuracy on a natural 70% centre zoom from 0.961 to 0.968 (+0.008, CI [+0.004, +0.012]). Averaging a normal and a HUD-dropout model is best or near-best on every view (`experiments/claude/cm_r19_t4_hud_eval.py`).
 
@@ -630,10 +632,17 @@ for tag in T4_TAGS:
         per_fold.append([tag, f, f1_score(y4[z["val_idx"]], z["val_probs"].argmax(1), average="macro")])
 pf = pd.DataFrame(per_fold, columns=["backbone", "fold", "macro-F1"]).pivot(index="backbone", columns="fold", values="macro-F1")
 pf["OOF (all folds)"] = [macro_f1(y4, oof_tag[t].argmax(1)) for t in pf.index]
-oof4 = np.mean([oof_tag[t] for t in T4_TAGS], axis=0)
-test4 = np.mean([test_tag[t] for t in T4_TAGS], axis=0)
+# Member weights inside the probability average (round 28): the fine-tuned DINOv2 counts three times. It is the most robust single
+# model on HUD-poor and corrupted views, and with its weight chosen nested (4 folds -> 5th; picks 3-4) the balanced macro-F1 over
+# full / zoom / HUD-hidden frames gains +0.0006 over equal weights, better in 5/5 folds (experiments/claude/ea_r28_t4_eight_members.py).
+T4_MEMBER_W = {"dinov2_v2": 3.0}
+w4m = np.array([T4_MEMBER_W.get(t, 1.0) for t in T4_TAGS])
+wmean4 = lambda arrs: np.tensordot(w4m / w4m.sum(), np.stack(arrs), axes=1)
+oof4 = wmean4([oof_tag[t] for t in T4_TAGS])
+test4 = wmean4([test_tag[t] for t in T4_TAGS])
 if len(T4_TAGS) > 1:
-    pf.loc["probability average"] = [np.nan] * N_FOLDS + [macro_f1(y4, oof4.argmax(1))]
+    pf.loc["probability average (equal weights)"] = [np.nan] * N_FOLDS + [macro_f1(y4, np.mean([oof_tag[t] for t in T4_TAGS], axis=0).argmax(1))]
+    pf.loc["probability average (member weights)"] = [np.nan] * N_FOLDS + [macro_f1(y4, oof4.argmax(1))]
 # Frozen-feature probe (round 27, scripts/train_task4_probe.py): logistic regression on frozen CLIP + DINOv2 + SigLIP 2 features,
 # fitted on the full frame, the 70% zoom and the HUD-hidden view of every training image. Much weaker alone, but it does not share
 # the fine-tuned members' errors: at 10% weight the balanced macro-F1 (mean of full / zoom / HUD-hidden frames, alpha 0.75) rises by
@@ -911,7 +920,7 @@ for tag in T4_TAGS:
         check_t4_order(np.load(pth), pth.stem)
     test4_final.append(blend_full(test_tag[tag], np.load(pth)["test_probs"]) if pth.exists() else test_tag[tag])
     print(f"Task 4 {tag}: full-data model {'included' if pth.exists() else 'NOT found -> 5-fold ensemble only'}")
-test4_final = np.mean(test4_final, axis=0)
+test4_final = wmean4(test4_final)
 if HAS_PROBE4:
     pth = C.PRED_DIR / "t4_probe_full.npz"
     check_t4_order(np.load(pth), pth.stem)
@@ -1206,7 +1215,7 @@ For Tasks 1–4, the final test predictions average the 5-fold models with model
 * **Task 1** uses 13k unlabeled training rows only implicitly. Semi-supervised learning on *training* rows (never test) is a natural next step, as are a focal-loss LightGBM objective and monotone constraints for interpretability.
 * **Task 3** could add distributional GBDTs (quantile regression at the mixture-median level, or NGBoost-style log-normal heads) to replace the constant-σ log-normal assumption.
 * **Task 4** test images show a covariate shift (unseen scenes, lower confidence) and a class-prior shift relative to training, so the leaderboard will likely sit below the OOF score. Next steps:
-  * larger or CLIP-pretrained backbones, which are known to be more shift-robust (a quick DINOv2-S run underfit at a conservative learning rate; ViT-B/16 costs ~4.5 GPU-hours per 5-fold run on this laptop);
+  * larger or CLIP-pretrained backbones, which are known to be more shift-robust (DINOv2 ViT-B/14 with a proper fine-tuning recipe is now the strongest member; CLIP / SigLIP / EVA02 ViT-B with the same recipe are the next candidates);
   * multi-scale/multi-crop TTA;
   * if the rules permit transductive post-processing, EM label-shift correction of the class priors.
 * **Task 5:** with a small analyst-labelled sample, the fusion weights and contamination level could be calibrated directly, and a temporal autoencoder could model the 4-period sequences.

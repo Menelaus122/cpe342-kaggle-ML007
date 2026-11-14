@@ -325,8 +325,10 @@ def task_cells(k):
         md(section(7, "Level-1 regressors are blended with non-negative weights that minimise total absolute error (fitted out-of-fold), "
                       "followed by a median-consistent zero gate and one scale factor."))
     elif k == 4:
-        md(section(7, "Fold models of architecturally different backbones are averaged in probability space, and class-wise decision "
-                      r"multipliers $\hat y=\arg\max_c w_c P_{ic}$ are tuned on the OOF blend for macro-$F_1$."))
+        md(section(7, "Fold models of architecturally different backbones are averaged in probability space (the fine-tuned DINOv2 "
+                      "ViT-B/14 counts three times; a logistic probe on frozen foundation features is mixed in at 10%). Class-wise decision "
+                      r"multipliers $\hat y=\arg\max_c w_c P_{ic}$ tuned on the OOF blend are reported but fail the nested check; the final "
+                      r"label uses the balanced-prior rule $\hat y=\arg\max_c p_c\,\pi_c^{-0.75}$ with the training class shares $\pi$."))
     else:
         md(section(7, "The unsupervised evidence (gap families, score ensemble, hard-evidence rules) is weighed for the $F_3$ metric: "
                       "the gap families are flagged, and the other two serve as cross-checks."))
