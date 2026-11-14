@@ -38,7 +38,8 @@ ARCH = {"cnxt_hud": ("convnext_tiny.in12k_ft_in1k", (160, 320)), "cnxt_grid": ("
         "deit3_hud": ("deit3_small_patch16_384.fb_in22k_ft_in1k", (192, 384)),
         "swinT_hud": ("swin_tiny_patch4_window7_224.ms_in22k_ft_in1k", (224, 448)),
         "cnxt_col": ("convnext_tiny.in12k_ft_in1k", (192, 384)),                     # round 27: grey 0.3, colour jitter 0.8 x gain 1.6
-        "dinov2_hud": ("vit_base_patch14_reg4_dinov2.lvd142m", (196, 392))}          # round 27: DINOv2-B fine-tuned, layer decay 0.65
+        "dinov2_hud": ("vit_base_patch14_reg4_dinov2.lvd142m", (196, 392)),          # round 27: DINOv2-B fine-tuned, layer decay 0.65
+        "dinov2_v2": ("vit_base_patch14_reg4_dinov2.lvd142m", (126, 238))}           # round 28: lr 5e-5, layer decay 0.8, 15 epochs, native aspect
 ENS = ["cnxt", "deit3", "cnxt_hud", "cnxt22k_hud", "effv2_hud", "deit3_hud", "cnxtS_hud"]
 OUT = Path("experiments/claude/outputs/r22_views")
 OUT.mkdir(parents=True, exist_ok=True)

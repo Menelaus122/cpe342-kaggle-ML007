@@ -104,6 +104,8 @@ T4_BACKBONES = {   # tag -> (timm model, input HxW) as trained by scripts/train_
     "deit3_hud": ("deit3_small_patch16_384.fb_in22k_ft_in1k", (192, 384)),
     # round 21: a larger HUD-dropout ConvNeXt (trained with --grad-ckpt to fit an 8 GB GPU)
     "cnxtS_hud": ("convnext_small.in12k_ft_in1k", (160, 320)),
+    # round 28: DINOv2 ViT-B/14 fine-tuned at the native aspect ratio (--lr 5e-5 --layer-decay 0.8 --warmup-epochs 2 --epochs 15 --p-hud 0.5)
+    "dinov2_v2": ("vit_base_patch14_reg4_dinov2.lvd142m", (126, 238)),
 }
 fold_done = lambda tag: all((C.PRED_DIR / f"t4_{tag}_fold{f}.npz").exists() for f in range(N_FOLDS))
 if not fold_done("cnxt") and RUN_T4_TRAINING:

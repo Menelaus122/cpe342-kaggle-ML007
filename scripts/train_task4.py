@@ -42,6 +42,7 @@ def main():
     ap.add_argument("--jitter-gain", type=float, default=None,
                     help="widens the brightness / contrast / saturation ranges of the colour jitter (default 1.0; round 27: 1.6)")
     ap.add_argument("--layer-decay", type=float, default=None, help="layer-wise lr decay for ViTs (e.g. 0.75)")
+    ap.add_argument("--warmup-epochs", type=int, default=1, help="linear warm-up epochs before the cosine decay (round 28: 2 for ViT-B)")
     ap.add_argument("--grad-ckpt", action="store_true",
                     help="gradient checkpointing: same training, less GPU memory (ConvNeXt-Small at batch 64 on an 8 GB GPU)")
     args = ap.parse_args()
@@ -76,7 +77,7 @@ def main():
         model, hist = task4.train_fold(args.model, arr, y, np.arange(len(y)), [], img_size=size, epochs=args.epochs,
                                        bs=args.bs, lr=args.lr, seed=SEED + 100, log=log,
                                        ckpt_path=MODEL_DIR / f"t4_{args.tag}_full.pt", aug_kw=aug_kw, grad_ckpt=args.grad_ckpt,
-                                       layer_decay=args.layer_decay)
+                                       layer_decay=args.layer_decay, warmup_epochs=args.warmup_epochs)
         tp = task4.predict_paths(model, test.path.values, size, tta=True)
         np.savez_compressed(out_path, test_probs=tp, test_file_name=np.array(test.file_name.tolist(), dtype="U"))
         (log_dir / f"t4_{args.tag}_full_history.json").write_text(json.dumps(hist, indent=1))
@@ -92,7 +93,7 @@ def main():
         model, hist = task4.train_fold(args.model, arr, y, tr, va, img_size=size, epochs=args.epochs, bs=args.bs,
                                        lr=args.lr, seed=SEED + f, log=log,
                                        ckpt_path=MODEL_DIR / f"t4_{args.tag}_fold{f}.pt", aug_kw=aug_kw, grad_ckpt=args.grad_ckpt,
-                                       layer_decay=args.layer_decay)
+                                       layer_decay=args.layer_decay, warmup_epochs=args.warmup_epochs)
         vp = task4.predict_array(model, arr[va], size, tta=True)
         tp = task4.predict_paths(model, test.path.values, size, tta=True)
         np.savez_compressed(out_path, val_idx=va, val_probs=vp, test_probs=tp,

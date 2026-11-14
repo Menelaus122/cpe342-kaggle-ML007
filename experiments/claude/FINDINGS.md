@@ -1335,3 +1335,68 @@ No class is over-predicted by more than 0.6 points, and the one that is slightly
 * **Task 2, 10-seed bag**: running (`BAG_DIR=r27_bag by_r14_bag.py cv t2`, about 7 CPU hours), then `dw_r27_t2_bag_eval.py` scores bags of 3 / 5 / 10 seeds under the v19 level 2.
 
 Expected public-score change of v19 from the nested estimates: Task 2 +0.0012 to +0.0020 and Task 4 +0.0005 on one fifth of the score each, so about +0.0003 to +0.0005 overall, if the gains carry over to test (the Task 4 estimate is on simulated HUD loss, not on test frames).
+
+## Round 28 (2026-11-14): v19 = 0.85623 (top 0.86750); Task 5 re-scan inside the unflagged accounts, Task 4 prior rule variants, DINOv2 re-test, patch-MIL head (`dx_`, `dx2_`, `dy_`, `dz_r28_*.py`)
+
+**v19 = 0.85623, +0.00108 over v18** (snapshot `versions/v19_LB0.85623/`). The nested estimates predicted +0.0003 to +0.0005. Tasks 2 and 4 changed in the same upload, so the split is not identified; if Task 2 gave its nested +0.0012 to +0.0020 (+0.0002 to +0.0004 on the score), Task 4 gave +0.0035 to +0.0045, against +0.0005 on the simulated views. A member built on frozen web-scale features helps test frames more than the HUD-loss simulation says. Top of the leaderboard: 0.86750, a gap of 0.01127 = 0.056 on one task.
+
+**Hypothesis B: a new anomaly family in the re-released Task 5 data that the 2,148 flags miss?** (`dx_r28_t5_unflagged_scan.py`, `dx2_r28_t5_aggregates.py`; label-free, test features only as in the pipeline; every statistic computed inside the 23,741 unflagged accounts so the known families cannot mask anything; every count compared with its own shuffle noise level.)
+
+| scan inside the unflagged accounts | result | noise level / reference |
+|---|---|---|
+| 1-D density gaps: 174 raw column tails, 200 engineered, 418 trajectory (period differences, curvature, slope, ratios, min / max, range) | largest lambda 23 / 32 / 35, groups of 15-41 accounts; none >= 50 | pipeline threshold 50; the same scan on all accounts: 30 tails >= 50, largest 42,064 |
+| pair pockets, engineered features (11,319 pairs) | one pair at z 8.7 (`friend_removes_cv` x `guild_changes_burst`, 126 observed vs 59) | 8.6; the pocket of the pipeline had z above 10.9 |
+| pair pockets, trajectory features across behaviours (21,951 pairs, random tie-break) | largest z 5.5 | 5.9 |
+| exact repeats across periods | only zeros of `friend_adds` / `friend_removes` (values clipped at 0; 4,469 accounts never remove a friend: 19%, a trait of normal accounts) | 0 repeats in the 22 other behaviours |
+| a zero in period 4 only, in >= 2 behaviours | 0 accounts | |
+| discrete columns across groups (4 flags, device / refund / guild counts per period and their sums): 141 pairs, 519 triples | largest z 3.1 / 4.1 | 3.7 / 4.6 |
+| missing cells per account | SD 2.38, as binomial; 27 accounts with >= 15 missing | 21.7 expected |
+| aggregates over the 24 continuous behaviours: within-account volatility, squared level, squared deviation of each period from the other three | SD ratio to the null 0.990-1.001; 15-28 accounts beyond the null's 0.1% / 99.9% quantiles; volatility quantiles equal N(0, 1/sqrt(24)) to 0.01 from 0.1% to 99.9% | 24 expected; top eigenvalue of the cross-behaviour correlations 1.061 vs the independence bound 1.065 |
+| multivariate detectors in normal-score space vs a Gaussian-copula null: Mahalanobis, k-NN distance (k = 5, 20, 100), Isolation Forest, LOF (20, 100), 5 principal components, autoencoder | upper tails 2-30 accounts above the null's 99.9% quantile | 24 expected; with the 207 single-IP bots added back: PC1 207 of 207, Isolation Forest 164 |
+
+* The unflagged accounts behave as one population of independent behaviours: no gap, no pocket, no cross-behaviour factor, no excess in any tail. The copula comparison has no power against a 2-feature pocket (adding the 339 pocket accounts back changes nothing), which is why pockets are scanned pairwise; that scan finds nothing new.
+* The 192 accounts "closer to the centre than the copula null allows" are the low end of the within-account volatility (aggregate −0.21 against an SD of 0.20) with no gap in the lower tail (lambda 16): a continuum, not a group.
+* The friend_removes x guild_changes cell is at the noise level; if it were real it would hold about 67 members among 126 accounts: +0.002 on Task 5 at most. Not added.
+* Size argument: for Task 5 to be 0.92 instead of 0.98-0.99 with our flags, about 190 anomalies would have to be missing. A group of that size with no trace in any marginal, pair, trajectory, discrete combination or aggregate cannot be found from the features by anyone. Hypothesis B is not supported; the 2,148 flags stay.
+* Leaderboard arithmetic with v19: 5 x 0.85623 = 4.281; T1 0.85 + T2 0.757 + T3 0.795 leaves T4 + T5 = 1.88, i.e. T4 = 0.89 with T5 = 0.99, in line with the label-free Task 4 estimates of round 11 (0.87-0.91). The gap to the top is most plausibly Task 4.
+
+**Task 2, 10-seed bag of LightGBM / XGBoost / CatBoost on the re-released data** (last item of the round 27 queue; `BAG_DIR=r27_bag by_r14_bag.py cv t2`, 206 minutes; `dw_r27_t2_bag_eval.py`). Seed-42 fits equal the pipeline caches exactly. Single-seed argmax macro-F1: LightGBM 0.7557 ± 0.0002, XGBoost 0.7557 ± 0.0002, CatBoost 0.7546 ± 0.0004; 10-seed bags 0.7561 / 0.7561 / 0.7548. Under the level 2 (stacker out of fold, multipliers nested), mean over the pipeline folds and three other splits:
+
+| members | v19 level 2 (0.4 stacker + 0.6 KDE NB) | folds better per split | stacker alone | folds better per split |
+|---|---|---|---|---|
+| bag 3 | −0.0001 | 2/5 1/5 2/5 1/5 | +0.0000 | 3/5 1/5 3/5 3/5 |
+| bag 5 | −0.0003 | 1/5 1/5 3/5 1/5 | −0.0000 | 2/5 2/5 2/5 2/5 |
+| bag 10 | −0.0003 | 2/5 0/5 2/5 2/5 | −0.0001 | 1/5 3/5 2/5 3/5 |
+
+Seed noise of a member (0.0002-0.0004) is far below the level-2 resolution, and the stacker already averages three GBDTs with a logistic model and the KDE member. Fails; Task 2 stays as in v19. This closes the round 27 queue: of its nine items, three went into v19 (Task 2 KDE blend, Task 4 probe, Task 3 THB average) and six failed.
+
+**Hypothesis A3: temperature and per-member exponents in the Task 4 prior rule** (`dy_r28_t4_member_alpha.py`; seven members + probe, all training images out of fold, uniform class mix, mean of full / zoom70 / HUD hidden; v19 rule 0.9745; everything nested).
+
+| variant | nested delta [95% CI] | folds | at the training mix |
+|---|---|---|---|
+| A: one exponent, nested from {0.3 … 2.0} (picks 0.75-1.0) | −0.0003 [−0.0006, −0.0000] | 0/5 | −0.0013 |
+| B: per-member temperature (0.52-0.56; EfficientNetV2 0.43), then pi^−alpha (picks 1.0-1.25) | −0.0007 [−0.0010, −0.0003] | 0/5 | −0.0014 |
+| C: prior adjustment per member before averaging, one alpha (picks 1.0-1.25) | −0.0002 [−0.0005, +0.0001] | 0/5 | −0.0011 |
+| D: per-member exponents, coordinate ascent visiting members first to last | +0.0001 [−0.0002, +0.0004] | 4/5 | −0.0006 |
+| D: the same, visiting members last to first | −0.0001 [−0.0003, +0.0002] | 2/5 | −0.0007 |
+| E (diagnostic, not usable without the TAs' approval): EM shares from the evaluated rows + Bayes rule | −0.0008 [−0.0012, −0.0004] | 0/5 | −0.0004 |
+
+* A temperature before the prior is not a new rule: argmax normalise(mix^(1/T)) · pi^−a equals argmax mix · pi^−(aT) on every row (checked), so T = 0.46 with a = 1 is alpha = 0.46, inside the family round 26 scanned. In-sample the three-view mean by alpha is 0.9735 (0.46), 0.9745 (0.75), 0.9746 (0.9), 0.9745 (1.0), 0.9738 (1.2): a plateau from 0.75 to 1.0, as before.
+* Per-member exponents: the first visiting order gives +0.0001 on 4/5 folds, but the exponents it picks are 1.5 for whichever members are visited first and 0.75 for the rest; reversing the order moves the 1.5s to the other members and the gain becomes −0.0001 (2/5). It is the same plateau reached with eight knobs, not a property of the members. Not adopted.
+* EM on the evaluated rows recovers the uniform shares on full and zoomed frames (0.198-0.202) but not on HUD-hidden frames (0.229 for 7-Eleven Knights), and the rule built on it is worse than the fixed exponent on every fold. So even with the TAs' approval a transductive prior estimate would not be expected to beat alpha = 0.75 when frames lose their HUD.
+* The rule stays argmax p · pi^−0.75.
+
+**Hypothesis A1: DINOv2-B with a proper ViT fine-tuning recipe, fold 0** (`train_task4.py --tag dinov2_v2 --model vit_base_patch14_reg4_dinov2.lvd142m --h 126 --w 238 --lr 5e-5 --layer-decay 0.8 --warmup-epochs 2 --epochs 15 --p-hud 0.5 --grad-ckpt --folds 0`; new option `--warmup-epochs`; 126x238 keeps the 120x230 aspect ratio and gives 9x17 patches, 220 s per epoch; `cv_r22_t4_eval.py dinov2_v2`). Round 27's run (lr 1.5e-5, decay 0.65, 10 epochs, 196x392) reached 0.9403 and was still rising; this one reaches 0.9869.
+
+| fold 0, macro-F1 | full | zoom70 | HUD hidden | gamma 3.5 | gain 0.15 | 75% grid | real dark / low contrast |
+|---|---|---|---|---|---|---|---|
+| cnxt_hud (ConvNeXt-T) | 0.9852 | 0.9632 | 0.9538 | 0.9093 | 0.9542 | 0.7816 | 0.9839 |
+| cnxtS_hud (ConvNeXt-S, round 20) | 0.9872 | 0.9675 | 0.9593 | | | | |
+| **dinov2_v2** | 0.9869 | **0.9740** | 0.9569 | **0.9454** | **0.9673** | **0.8526** | 0.9752 |
+| seven members | 0.9892 | 0.9709 | 0.9607 | 0.9270 | 0.9618 | 0.7975 | 0.9825 |
+| seven + dinov2_v2 | 0.9893 | 0.9724 | 0.9629 | 0.9295 | 0.9642 | 0.8355 | 0.9838 |
+
+* Alone it beats the seven-member ensemble on zoomed frames and on every synthetic corruption no model was trained on (dark, 75% hidden): the most robust single model so far.
+* Added to the seven under the v17 rule at a uniform mix, three views: **+0.0012 [+0.0003, +0.0022]** (full +0.0002, zoom70 +0.0029, HUD hidden +0.0005); at the training mix (full + zoom70) +0.0017 [+0.0008, +0.0028]. First candidate since ConvNeXt-Small whose CI is above zero. Passes; folds 1-4 and the full-data model are training (about 55 minutes each).
+* The full-data model and folds 1-4 are queued on the GPU; `ea_r28_t4_eight_members.py` then scores the eight members + probe on all folds before anything is built.
+* Which of the three changes did it (learning rate 1.5e-5 → 5e-5, layer decay 0.65 → 0.8, 10 → 15 epochs with 2 warm-up, 196x392 → 126x238) is not separated; the round 27 run was under-trained, so the recipe is the likely cause, not the aspect ratio.
