@@ -1453,3 +1453,116 @@ Seed noise of a member (0.0002-0.0004) is far below the level-2 resolution, and 
 * **Co-movement rings** (two accounts changing in the same periods: correlation of the 96-number period-deviation profile with the most similar other account, against a block-shuffled null): quantiles identical (99.9%: 0.694 vs 0.692), 25 accounts above the null's 99.9% level (24 expected), none above its maximum. Power: with 5 planted rings of 5 accounts (profile correlation about 0.5) 11 of the 25 members exceed the null's maximum; with 20 rings, 46 of 100.
 * **Exact repeats across accounts**: no non-zero value is shared by two accounts in any of 106 continuous columns; no two accounts share their coordinates to 3 decimals; `account_age_days` has no repeated value.
 * Task 5 stays at 2,148 flags.
+
+**Three CPU checks on the cached out-of-fold predictions while EVA02 trained** (2026-11-15; one process at a time, one or two threads). All three fail; nothing changes in the pipeline.
+
+* **Task 2, temperature of the KDE naive Bayes before the blend** (`ed_r28_t2_kde_temperature.py`). Idea: the KDE NB multiplies 38 likelihoods as if independent, so it should be over-confident, and flattening it (p^(1/T), T in {1.5, 2, 2.5, 3, 4}) should blend better. The premise does not hold: out of fold the KDE NB is already calibrated (mean top probability 0.778 vs accuracy 0.771; log-loss 0.625 at T = 1, rising to 0.638 / 0.691 / 0.894 at T = 1.5 / 2 / 4); the stacker is equally calibrated (0.771 vs 0.770). This fits round 19 / 23, which found the columns close to independent given the class: then naive Bayes is the right model and its probabilities need no flattening. Nested on four stacker splits (T, KDE weight in {0.3, ..., 0.9} and multipliers from 4 folds; one Powell start instead of five, the same for reference and candidates): mean delta against T = 1 between -0.0003 and +0.0000 for every fixed T and for T chosen nested; at most 4/5 folds on one split, mostly 1-3/5. The in-sample T x w surface varies by 0.0002. Fails.
+* **Task 1, standardised level-2 log-odds** (`ee_r28_t1_zscore_l2.py`; the three meta-models re-fitted on the cached member log-odds, because the pipeline caches only the mean of the two tree meta-models). The three log-odds already have almost the same spread (OOF SD 4.88 / 4.59 / 4.55 for LogReg / LightGBM / CatBoost; correlations 0.966-0.996), so standardising moves the weights from 1/3 each to 0.319 / 0.339 / 0.342 and changes 0.09-0.21% of labels. Nested F2 delta per split -0.0001 / -0.0001 / +0.0003 / -0.0001 (mean -0.0000; folds better 2, 1, 3, 2 of 5); test-like +0.0001. Fails.
+* **Task 3, zero gate where historical_spending and prev_month_spending are both 0** (`ef_r28_t3_zero_pair.py`; the pipeline's OOF prediction rebuilt nested, NMAE 0.79458, and saved to `outputs/r28/t3_oof_rebuilt.npz` so later Task 3 checks skip the LP). No such row exists: both columns are strictly positive (minimum 0.026 / 0.008 THB, before and after the identity repair; 45 rows have both missing). Nearest well-posed version: the accounts with the lowest repaired historical_spending (bottom 1 / 5 / 10 / 25%; y = 0 in 69% of them against 48% overall). The median gate already sets 90-92% of them to 0, and among the rest the zero share is 25-38%, below 50% in every probability band (at most 44% at P(y>0) + shift in (0.5, 0.6]), so the L1-optimal prediction there is positive and a stricter gate cannot help: nested over group and gate level +0.00000 [-0.00001, +0.00001], 3/5 folds, 12 rows changed. Fails; the gate is already calibrated on these accounts.
+
+**EVA02-Base as a ninth Task 4 member, all five folds** (`ec_r28_t4_ninth_member.py eva02B`, 2026-11-15; every fold model predicts its own validation images under the full, 70%-zoom and HUD-hidden views, h-flip TTA, written to `outputs/r19_views/eva02B_fold{f}.npz`; uniform class mix, v17 rule, mean over the three views). Fold models: plain-argmax macro-F1 0.9839 / 0.9842 / 0.9854 / 0.9841 / 0.9832; the full-data model trained 15 epochs (final loss 0.763).
+
+| full / zoom70 / HUD hidden / mean | |
+|---|---|
+| eva02B alone | 0.9846 / 0.9690 / 0.9466 / 0.9667 |
+| dinov2_v2 alone | 0.9860 / 0.9725 / 0.9539 / 0.9708 |
+| v20: eight (DINOv2 x3) + 10% probe | 0.9895 / 0.9757 / 0.9649 / 0.9767 |
+
+| added to v20 | delta [95% CI] | folds better | full / zoom70 / HUD hidden | training mix |
+|---|---|---|---|---|
+| weight 1 | +0.0004 [+0.0001, +0.0007] | 4/5 | +0.0002 / +0.0006 / +0.0003 | +0.0004 |
+| weight 1.5 | +0.0005 [+0.0001, +0.0009] | 5/5 | +0.0004 / +0.0009 / +0.0002 | +0.0005 |
+| weight 2 | +0.0006 [+0.0002, +0.0010] | 4/5 | +0.0004 / +0.0012 / +0.0002 | +0.0006 |
+| weight 3 | +0.0004 [-0.0002, +0.0009] | 4/5 | +0.0001 / +0.0010 / -0.0000 | +0.0003 |
+| weight 4 | -0.0000 [-0.0005, +0.0006] | 3/5 | -0.0001 / +0.0008 / -0.0007 | +0.0001 |
+| **weight nested** (picks 2, 2, 1.5, 2, 2) | **+0.0005 [+0.0001, +0.0009]** | **4/5** (+0.0011 +0.0004 +0.0003 +0.0008 -0.0000) | +0.0004 / +0.0011 / +0.0001 | +0.0005 |
+| DINOv2 and EVA02 weights nested together (picks (4, 2) once, (3, 2) four times) | +0.0006 [+0.0001, +0.0010] | 4/5 | +0.0004 / +0.0012 / +0.0001 | +0.0005 |
+| probe weight nested, EVA02 at 2 (picks 0.1 in every fold) | +0.0006 [+0.0002, +0.0010] | 4/5 | | +0.0006 |
+
+* Passes the rule (mean > 0, 4/5 folds; fold 4 is -0.00004). The nested weight against weight 1 is +0.0001, 3/5 folds, so 2 is the plateau the nested choice supports rather than a proven improvement over 1. The joint grid keeps DINOv2 at 3 (in-sample DINOv2 3 or 4 with EVA02 2 both +0.0006) and the probe at 0.1. Labels changed on the training images 0.38%.
+* As with DINOv2, the gain is largest on zoomed frames (+0.0011) and smallest on full frames; EVA02 alone is weaker than DINOv2 on every view but adds a different error pattern (MIM pre-training on IN-22k against DINOv2's self-distillation on LVD-142M).
+* Pipeline: `eva02B` in `T4_BACKBONES` (126x238), `T4_MEMBER_W = {"dinov2_v2": 3.0, "eva02B": 2.0}`; the 7.4 member list and the limitations paragraph updated.
+* **v21 built (2026-11-15; `submission_v21.csv` = `submission.csv`, not uploaded yet).** Master and `task4` notebooks re-executed (the learning-curve cell now cycles the 8-colour palette, dashed for the ninth backbone); the other task notebooks unchanged. OOF in the notebook: eva02B alone 0.9842 (folds 0.9839-0.9854); equal-weight average 0.9888 → 0.9892, member weights 0.9891 → 0.9893, + probe 0.9896 → 0.9897 (argmax); under the rule 0.9886 → 0.9890 at the training mix and 0.9895 → 0.9899 at a balanced mix. Test: eva02B agrees with the other members' test argmax 88.5-90.9% of the time (DINOv2 90.9%), 18% of its test frames have max-p < 0.7 (OOF 2%). 323 Task 4 labels change against v20 (1.25%), spread over all class pairs (largest: PUBE Mobile → Free Fried 39, FiveN → Roblock 31, Roblock → FiveN 31, Free Fried → PUBE Mobile 31); predicted shares 0.142 / 0.271 / 0.144 / 0.244 / 0.198 → 0.143 / 0.271 / 0.145 / 0.244 / 0.198; Tasks 1, 2, 3, 5 identical (0 rows). Expected from the nested estimate alone: +0.0005 on Task 4 = +0.0001 on the score; the last two Task 4 uploads transferred 3-8 times their estimates.
+* **v21 = 0.85939, −0.00009 against v20** (uploaded 2026-11-15; snapshot `versions/v21_LB0.85939/`). Only Task 4 changed, so about −0.0005 on Task 4 from 323 changed labels, against an expected +0.0005. If roughly half of the changed labels fall in the public split and each is close to a coin flip, one SD of the net count is about sqrt(160) = 13 labels, about ±0.001 on Task 4: the result is half an SD below zero and half an SD below the estimate, i.e. noise either way. What it does say: the 3-8x over-transfer of v19 and v20 is not a rule. Those two changes moved 340 and 769 labels in a consistent direction (probe: a different feature family; DINOv2: a much more robust backbone on corrupted frames, +2 to +5 points on gamma 3.5 / 75% hidden); EVA02 alone is below DINOv2 on the three proxy views (mean 0.9667 vs 0.9708) and below the v20 members on the 75%-hidden grid (fold 0: 0.8228 vs 0.8588), though above them on gamma 3.5 (0.9412 vs 0.9354); its gain on the proxies was a diversity gain of +0.0005, not a robustness jump. The pipeline keeps EVA02 at weight 2: it passed the rule fixed before the upload, and the public score is not a selection criterion.
+* Round 29 (DINOv2 at 252x476, fold 0) was stopped by the harness for low memory at epoch 3 of 15 (val F1 0.307 / 0.764 / 0.909, the same curve as dinov2_v2's 0.330 / 0.775 / 0.909). Commit reached 45.0 of 46.0 GB with 7.5 GB of VRAM in use (EVA02 at 126x238: 3.4 GB VRAM, ~2 GB commit headroom); without any trainer 30.8 GB is committed while the eight largest processes hold about 8 GB. Not restarted.
+
+## Audit after the TA ruling on test data (2026-11-15)
+The TAs answered a classmate's questions: using unlabeled test images to choose a validation split that resembles the test set is
+data leakage, and so is comparing test and train image statistics in the EDA to choose augmentation; any pretrained-model licence
+is fine; TTA at prediction (flips, zooms, averaging) is allowed.
+
+**Main pipeline (code), checked file by file.** No model, encoder, imputer, scaler or fold split is fitted on test data: Task 1
+features standardise with training statistics (`task1.add_features(ref=train)`), the 24-column members fill with the training
+median; Task 2 composites and frequency encodings use training rows, the KDE naive Bayes fits training rows only; Task 3 fills
+spending from row identities (per row) and imputes `segment` with a classifier trained on training rows; Task 4 normalises with
+fixed ImageNet constants, decodes test images only to predict them (`train_task4.py`, `train_task4_probe.py`: the probe's
+mean / SD come from training rows); folds are `StratifiedKFold` on training labels. Task 5 has only `test.csv` by design.
+Changed in this round so that no check computes statistics on test data:
+* `src/audit.py`: adversarial validation (train vs test LightGBM, KS) and the test-image scan removed; the audit now covers the
+  training data only (Task 5: its one file). `nb_part1.py` section 3.6 text and calls updated (the Task 1 "test rows are more
+  complete, test F2 should be higher" paragraph and the test-brightness remark are gone).
+* `nb_part2.py` section 7.4: the "distribution-shift diagnostics" cell (test confidence, fold agreement on test, predicted test class
+  mix; figure `t4_shift.png`) replaced by OOF pairwise agreement of the members; the "test-set shift" paragraph replaced by a
+  training-data rationale and a note that the test diagnostics were removed; "less confident on test images" (DINOv2-S) and the
+  Task 1 "test-like" mentions removed; limitations no longer propose EM label-shift correction.
+* `build_task_notebooks.py` (its own copy of the audit cells): the per-task audits call the training-only functions, the Task 1
+  overview shows the training missing rate only (it printed the test's too), Task 4 picks the new OOF-agreement cell.
+* `experiments/README.md` lists the old scripts that used test data for diagnostics; `cv_r22_t4_eval.py` lost its test diagnostic.
+
+**Decisions that test data influenced (history; still open for the user):**
+1. Task 4 balanced-prior rule (alpha 0.75, since v17) and the uniform-class-mix validation used for every Task 4 decision since
+   round 25: adopted because the models' predictions on test images showed 17% 7-Eleven Knights against 39% in training (round 23:
+   "the reason to switch ... is the grey area"). alpha itself was fixed on training images. Rule text in 7.4 kept as written.
+2. HUD dropout (7 of 9 members) and the zoom70 / HUD-hidden validation views: supported by a training-only occlusion study (centre-
+   only accuracy 0.919 vs 0.982), but partly motivated by low-confidence test images looking HUD-less (round 19 section 5); the
+   7.4 sentence saying so is kept.
+3. Low-light augmentation and Mosaic not tried because test confidence was lower in every brightness bin (round 22).
+4. Task 1 "test-like" gate (validation rows re-weighted to the test's missing-cell rates): decisive once (round 8, E1a imputed
+   LightGBM rejected at +0.0011 OOF); every merged Task 1 change passes on plain OOF alone (round 11 members +0.0016, 5/5 folds).
+   Retired: not used for any new decision.
+
+**Round 29, Task 4: 4-view multi-scale TTA** (`eg_r29_t4_tta4.py`; every fold model of the nine v21 members predicts its own
+validation images under original, h-flip, central 85% zoom and zoom h-flip, saved separately in `outputs/r29_tta/`; scored on all
+31,546 training images out of fold at the training class mix, no synthetic views, no re-weighting; the baseline is the re-computed
+2-view mean, which matches the cached probabilities to 0.0001 macro-F1 per member and exactly for the ensemble).
+
+| member, argmax | 2 views | 4 views (w = 0.5) | w = 0.25 | zoom85 pair alone |
+|---|---|---|---|---|
+| cnxt | 0.9865 | 0.9849 (-0.0016) | 0.9860 (-0.0005) | 0.9787 |
+| deit3 | 0.9839 | 0.9839 (+0.0000) | 0.9845 (+0.0007) | 0.9779 |
+| cnxt_hud | 0.9845 | 0.9831 (-0.0013) | 0.9844 (-0.0001) | 0.9784 |
+| cnxt22k_hud | 0.9832 | 0.9828 (-0.0004) | 0.9834 (+0.0002) | 0.9783 |
+| effv2_hud | 0.9816 | 0.9803 (-0.0013) | 0.9815 (-0.0001) | 0.9751 |
+| deit3_hud | 0.9814 | 0.9812 (-0.0002) | 0.9822 (+0.0008) | 0.9768 |
+| cnxtS_hud | 0.9861 | 0.9843 (-0.0018) | 0.9859 (-0.0002) | 0.9802 |
+| dinov2_v2 | 0.9864 | 0.9864 (+0.0000) | 0.9867 (+0.0002) | 0.9828 |
+| eva02B | 0.9842 | 0.9845 (+0.0003) | 0.9847 (+0.0006) | 0.9807 |
+
+| v21 ensemble (0.9897 argmax / 0.9890 rule) | argmax | rule alpha 0.75 |
+|---|---|---|
+| 4 views on DINOv2 + EVA02, w = 0.5 (the brief's candidate) | -0.0003 [-0.0007, +0.0000], 1/5 folds | -0.0003 [-0.0008, +0.0002], 2/5 |
+| 4 views on DINOv2 + EVA02, w = 0.25 | -0.0001 [-0.0004, +0.0002], 2/5 | -0.0002 [-0.0006, +0.0002], 1/5 |
+| 4 views on all nine, w = 0.5 | -0.0012 [-0.0018, -0.0007], 0/5 | -0.0010 [-0.0017, -0.0005], 0/5 |
+| 4 views on all nine, w = 0.25 | -0.0003 [-0.0006, +0.0001], 2/5 | -0.0004 [-0.0008, +0.0000], 1/5 |
+| all nine, w nested from {0.25, 0.5} (picks 0.25 in every fold) | -0.0003, 2/5 | -0.0004, 1/5 |
+
+* Fails at every setting. The zoomed views alone are 0.4-0.8 points worse than full frames for every member (they crop away the
+  frame edges, where the HUD sits, and the training frames are full screenshots), so averaging them in dilutes the members; the ViTs
+  lose least (DINOv2 0.9828, EVA02 0.9807 on zoom alone) and gain at most +0.0006 alone at w = 0.25, which the ensemble does not
+  keep. The pipeline stays at original + h-flip. (Test images were not used; whether zoom TTA would help on harder frames cannot be
+  judged without them, and judging it from test statistics is what the TA ruling excludes.)
+
+**Team decisions after the audit (2026-11-15, from the user).**
+* HUD dropout stays: the user's reading is that the training-image occlusion study (round 19) and the training-image views decide
+  it. The provenance (also prompted by HUD-less low-confidence test frames, round 19 section 5) stays recorded above and in a
+  one-line note in the notebook's 7.4.
+* The balanced-prior rule (alpha 0.75) stays. The notebook, README and this file now give the class-imbalance rationale: 39.4% of
+  the training images are 7-Eleven Knights (others 10.1-18.8%), the slides warn "Watch for class imbalance in images", a
+  cross-entropy posterior carries the training prior, macro-F1 weighs classes equally, and logit adjustment (Menon et al., ICLR
+  2021) removes the prior; alpha fixed on training images (rounds 23 / 25). The historical reason for the switch (round 23: the
+  class mix predicted on test images) is not rewritten; the notebook and README carry a one-line provenance note.
+* v21 rolled back to v20 because v21 scored lower on the public leaderboard (0.85939 vs 0.85948; inside noise, see the v21 entry):
+  `eva02B` removed from `T4_BACKBONES` / `T4_MEMBER_W`, the pipeline is eight members (DINOv2 x3) + 10% probe again. The EVA02
+  caches stay in `outputs/preds` and `versions/v21_LB0.85939/` for reference.
+* The three CPU checks the user queued for v22 (Task 2 KDE temperature, Task 1 standardised log-odds, Task 3 conditional zero
+  gate) are the round 28 checks above (`ed_`, `ee_`, `ef_r28_*.py`): all failed; not re-run.

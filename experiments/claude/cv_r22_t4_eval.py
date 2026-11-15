@@ -41,9 +41,11 @@ ARCH = {"cnxt_hud": ("convnext_tiny.in12k_ft_in1k", (160, 320)), "cnxt_grid": ("
         "dinov2_hud": ("vit_base_patch14_reg4_dinov2.lvd142m", (196, 392)),          # round 27: DINOv2-B fine-tuned, layer decay 0.65
         "dinov2_v2": ("vit_base_patch14_reg4_dinov2.lvd142m", (126, 238)),           # round 28: lr 5e-5, layer decay 0.8, 15 epochs, native aspect
         "eva02B": ("eva02_base_patch14_448.mim_in22k_ft_in22k_in1k", (126, 238)),    # round 28: the dinov2_v2 recipe
-        "siglip2_v2": ("vit_base_patch16_siglip_224.v2_webli", (128, 240))}          # round 28: the dinov2_v2 recipe
-ENS = ["cnxt", "deit3", "cnxt_hud", "cnxt22k_hud", "effv2_hud", "deit3_hud", "cnxtS_hud", "dinov2_v2"]      # v20: eight members
+        "siglip2_v2": ("vit_base_patch16_siglip_224.v2_webli", (128, 240)),          # round 28: the dinov2_v2 recipe
+        "dinov2_r2": ("vit_base_patch14_reg4_dinov2.lvd142m", (252, 476))}           # round 29: dinov2_v2 at 2x size (18x34 patches), lr 4e-5
+ENS = ["cnxt", "deit3", "cnxt_hud", "cnxt22k_hud", "effv2_hud", "deit3_hud", "cnxtS_hud", "dinov2_v2"]      # v20: eight members (v21 rolled back)
 MEMBER_W = {"dinov2_v2": 3.0}                                        # v20: the fine-tuned DINOv2 counts three times
+REPLACES = {"dinov2_r2": "dinov2_v2"}                                # round 29: also scored in place of this member, at its weight
 OUT = Path("experiments/claude/outputs/r22_views")
 OUT.mkdir(parents=True, exist_ok=True)
 OBJ = ["full", "zoom70"]
@@ -178,17 +180,17 @@ for c in [c for c in CANDS if c in P]:
     d3 = [np.mean([f3(b3[v], i) - f3(a3[v], i) for v in V3]) for i in boot]
     print(f"  (ensemble + {c}) + 10% probe minus ensemble + 10% probe, uniform mix, three views: {np.mean(per):+.4f} [{np.quantile(d3, .025):+.4f}, {np.quantile(d3, .975):+.4f}] "
           f"(full {per[0]:+.4f}, zoom70 {per[1]:+.4f}, HUD hidden {per[2]:+.4f})")
+    if c in REPLACES and REPLACES[c] in ens:
+        old = REPLACES[c]
+        MEMBER_W[c] = MEMBER_W.get(old, 1.0)
+        rep = [c if t == old else t for t in ens]
+        for label, ts, ref in [(f"{c} in place of {old} (weight {MEMBER_W[c]:g})", rep, ens),
+                               (f"{c} alongside {old}, both at weight {MEMBER_W[c]:g}", ens + [c], ens)]:
+            ar, br = {v: fus(ref, v) for v in V3}, {v: fus(ts, v) for v in V3}
+            per = [f3(br[v], allr) - f3(ar[v], allr) for v in V3]
+            d3 = [np.mean([f3(br[v], i) - f3(ar[v], i) for v in V3]) for i in boot]
+            print(f"  {label}, + 10% probe, uniform mix, three views: {np.mean(per):+.4f} [{np.quantile(d3, .025):+.4f}, {np.quantile(d3, .975):+.4f}] "
+                  f"(full {per[0]:+.4f}, zoom70 {per[1]:+.4f}, HUD hidden {per[2]:+.4f})")
+        MEMBER_W.pop(c)
 
-# Label-free diagnostic on test images (fold-0 models' test probabilities; reported only, never used to decide: being confident on
-# a test image is not the same as being right on it).
-ent = lambda p: -(p * np.log(np.clip(p, 1e-12, 1))).sum(1)
-TP = {t: np.load(PRED_DIR / f"t4_{t}_fold0.npz")["test_probs"] for t in tags if (PRED_DIR / f"t4_{t}_fold0.npz").exists()}
-if all(t in TP for t in ens):
-    pe = np.mean([TP[t] for t in ens], 0)
-    unsure = pe.max(1) < 0.6
-    print(f"\ntest images where the current ensemble's fold-0 models are unsure (max prob < 0.6): {unsure.sum()} of {len(pe)}")
-    for t in ["cnxt_hud"] + CANDS:
-        if t in TP:
-            agree = (TP[t].argmax(1) == pe.argmax(1))
-            print(f"  {t:12s} entropy on them {ent(TP[t][unsure]).mean():.3f} (elsewhere {ent(TP[t][~unsure]).mean():.3f}); "
-                  f"agrees with the ensemble on {agree[unsure].mean():.3f} of them, {agree[~unsure].mean():.3f} elsewhere")
+# (Until 2026-11-15 a label-free diagnostic on test images followed here; removed after the TA ruling on test data.)

@@ -94,7 +94,7 @@ LOAD = {
        'reduce_mem_usage(t1_train, verbose=True)\n'
        'display(pd.DataFrame({"train rows": [len(t1_train)], "test rows": [len(t1_test)], "features": [t1_test.shape[1] - 1],\n'
        '                      "cheater share": [t1_train.is_cheater.mean()],\n'
-       '                      "missing (train / test)": [f"{t1_train.drop(columns=\'is_cheater\').isna().mean().mean():.3f} / {t1_test.isna().mean().mean():.3f}"]}))',
+       '                      "missing rate": [t1_train.drop(columns="is_cheater").isna().mean().mean()]}))',
     2: 't2_train, t2_test = task2.load()\nreduce_mem_usage(t2_train, verbose=True)\nseg_names = ["Casual", "Grinder", "Social", "Whale"]\n'
        'display(pd.DataFrame({"train rows": [len(t2_train)], "test rows": [len(t2_test)], "features": [t2_test.shape[1] - 1],\n'
        '                      "missing rate": [t2_train.drop(columns="segment").isna().mean().mean()]}))',
@@ -147,15 +147,15 @@ ABLATION = {
 
 AUDIT = {
     1: 'from src import audit\nwith pd.option_context("display.max_colwidth", 120):\n'
-       '    display(pd.Series(audit.task_audit(t1_train, t1_test, "is_cheater"), name="Task 1").to_frame())',
+       '    display(pd.Series(audit.task_audit(t1_train, "is_cheater"), name="Task 1").to_frame())',
     2: 'from src import audit\nwith pd.option_context("display.max_colwidth", 120):\n'
-       '    display(pd.Series(audit.task_audit(t2_train, t2_test, "segment"), name="Task 2").to_frame())',
+       '    display(pd.Series(audit.task_audit(t2_train, "segment"), name="Task 2").to_frame())',
     3: 'from src import audit\nwith pd.option_context("display.max_colwidth", 120):\n'
-       '    display(pd.Series(audit.task_audit(t3_train, t3_test, "spending_30d", regression=True), name="Task 3").to_frame())',
+       '    display(pd.Series(audit.task_audit(t3_train, "spending_30d", regression=True), name="Task 3").to_frame())',
     4: 'from src import audit\n'
-       'display(pd.DataFrame(audit.image_audit(task4.DATA, {"train": t4_train, "test": t4_test})).T.rename_axis("Task 4 images"))',
+       'display(pd.DataFrame([audit.image_audit(task4.DATA, t4_train)], index=["Task 4 training images"]).T)',
     5: 'from src import audit\nwith pd.option_context("display.max_colwidth", 200):\n'
-       '    display(pd.Series(audit.task_audit(None, t5_test), name="Task 5").to_frame())',
+       '    display(pd.Series(audit.task_audit(t5_test), name="Task 5").to_frame())',
 }
 
 TUNE_PARAMS = {
@@ -259,8 +259,8 @@ def task_cells(k):
         md(md_for_task(pick("For every behaviour, the deviation of **period 4"), 5, lead=5))
 
     # 3.6 data-quality audit (same checks as the master notebook, this task only)
-    md("### Data-quality audit\nAdversarial validation (train vs test), missing values vs target, impossible values, duplicates and "
-       "collinearity, computed by `src/audit.py` on features only (see the master notebook §3.6).")
+    md("### Data-quality audit\nMissing values vs target, impossible values, duplicates and collinearity, computed by `src/audit.py` "
+       "on the training data only (Task 5: its one file; see the master notebook §3.6).")
     code(AUDIT[k])
     md(md_for_task(pick("**Audit findings.**"), k))
 
@@ -343,7 +343,7 @@ def task_cells(k):
         code(pick("m3 = {}\nr = cached")); code(pick("names3 = list(m3)"))
     elif k == 4:
         md(md_for_task(pick("## 7.4 Task 4: Game title detection", "markdown"), 4))
-        code(pick("y4 = t4_train.label.values")); code(pick("# Distribution-shift diagnostics"))
+        code(pick("y4 = t4_train.label.values")); code(pick("# Diversity of the members on held-out TRAINING images"))
     else:
         md(md_for_task(pick("## 7.5 Task 5:", "markdown"), 5))
         code(pick("members = [k for k in det_scores"))

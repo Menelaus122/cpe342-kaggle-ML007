@@ -106,6 +106,7 @@ T4_BACKBONES = {   # tag -> (timm model, input HxW) as trained by scripts/train_
     "cnxtS_hud": ("convnext_small.in12k_ft_in1k", (160, 320)),
     # round 28: DINOv2 ViT-B/14 fine-tuned at the native aspect ratio (--lr 5e-5 --layer-decay 0.8 --warmup-epochs 2 --epochs 15 --p-hud 0.5)
     "dinov2_v2": ("vit_base_patch14_reg4_dinov2.lvd142m", (126, 238)),
+    # (round 28 also trained EVA02 ViT-B/14 with this recipe: in v21, 0.85939 vs v20's 0.85948; removed again, see Limitations)
 }
 fold_done = lambda tag: all((C.PRED_DIR / f"t4_{tag}_fold{f}.npz").exists() for f in range(N_FOLDS))
 if not fold_done("cnxt") and RUN_T4_TRAINING:
@@ -121,8 +122,9 @@ for j, tag in enumerate(T4_TAGS):
     for f in range(N_FOLDS):
         h = pd.DataFrame(json.loads((log_dir / f"t4_{tag}_fold{f}_history.json").read_text()))
         lab = tag if f == 0 else None
-        axes[0].plot(h.epoch + 1, h.loss, color=CAT[j], alpha=0.55, lw=1.4, label=lab)
-        axes[1].plot(h.epoch + 1, h.val_f1, color=CAT[j], alpha=0.55, lw=1.4, label=lab)
+        sty = dict(color=CAT[j % len(CAT)], ls="-" if j < len(CAT) else "--", alpha=0.55, lw=1.4, label=lab)   # 9 backbones, 8 colours
+        axes[0].plot(h.epoch + 1, h.loss, **sty)
+        axes[1].plot(h.epoch + 1, h.val_f1, **sty)
 axes[0].set_title("Training loss (soft-target CE, Mixup/CutMix)"); axes[0].set_xlabel("epoch")
 axes[1].set_title("Validation macro-F1 of the EMA weights (5 folds each)"); axes[1].set_xlabel("epoch"); axes[1].set_ylim(0.7, 1.0)
 axes[1].legend(loc="lower right")
@@ -269,7 +271,7 @@ md(r"""
 <a id="7"></a>
 # 7. Stacking Ensemble (K-Fold) & Metric-Aware Post-Processing
 
-**Level 1:** diverse model families trained on identical folds: three GBDTs with different tree-growth biases (LightGBM leaf-wise, XGBoost depth-wise, CatBoost oblivious trees), plus a bagged randomised-tree ensemble (ExtraTrees) and a linear model (logistic regression on Gaussian-rank features). Task 1 adds four members built the way last year's 1st-place team built theirs (CPE342 1/2025, public repo [Saltywan/CPE342-KAGGLE](https://github.com/Saltywan/CPE342-KAGGLE)): Random Forest, LightGBM, XGBoost and CatBoost on 24 of the 31 raw columns with training-median imputation, each averaged over two seeds. They see the data differently from our members, and adding them raises the nested OOF F2 by +0.0016 (95% CI [+0.0008, +0.0024], better in 5/5 folds, also better under test-like missingness).
+**Level 1:** diverse model families trained on identical folds: three GBDTs with different tree-growth biases (LightGBM leaf-wise, XGBoost depth-wise, CatBoost oblivious trees), plus a bagged randomised-tree ensemble (ExtraTrees) and a linear model (logistic regression on Gaussian-rank features). Task 1 adds four members built the way last year's 1st-place team built theirs (CPE342 1/2025, public repo [Saltywan/CPE342-KAGGLE](https://github.com/Saltywan/CPE342-KAGGLE)): Random Forest, LightGBM, XGBoost and CatBoost on 24 of the 31 raw columns with training-median imputation, each averaged over two seeds. They see the data differently from our members, and adding them raises the nested OOF F2 by +0.0016 (95% CI [+0.0008, +0.0024], better in 5/5 folds).
 
 **Level 2:** a regularised logistic-regression stacker on the level-1 OOF log-odds. The stacker is itself cross-validated **on the same folds**, so its reported score is also out-of-fold. Its test input is the fold-averaged level-1 test predictions. Task 1 averages the logistic stacker with two small tree meta-models on the same nine log-odds (LightGBM with 8 leaves and CatBoost of depth 4, three seeds each; mean of the three log-odds): with meta-models and cut-off both nested this adds +0.0002 to +0.0006 F2 on four stacker splits, better in 4/5 folds on each (round 26).
 
@@ -300,7 +302,7 @@ m1["LogReg"] = cached("t1_lr", lambda: run_cv_sklearn(make_lr1, "binary", X1.val
 
 # Four more members built the way last year's 1st-place team built theirs (CPE342 1/2025, github.com/Saltywan/CPE342-KAGGLE):
 # 24 of the 31 raw columns, training-median imputation, near-default settings, each averaged over two seeds. Their different
-# inputs make them diverse: OOF F2 +0.0016 (95% CI [+0.0008, +0.0024], 5/5 folds), test-like +0.0023 (round 11, bn_/bo_ scripts).
+# inputs make them diverse: OOF F2 +0.0016 (95% CI [+0.0008, +0.0024], 5/5 folds) (round 11, bn_/bo_ scripts).
 R1, R1_test = task1.build_c24(t1_train, t1_test)
 P24 = {"lgb": {"learning_rate": 0.05, "num_leaves": 31}, "xgb": {"learning_rate": 0.05, "max_depth": 6}, "cat": {"learning_rate": 0.08, "depth": 6}}
 SEEDS24 = (42, 7)
@@ -598,17 +600,19 @@ For each backbone, every fold model (final EMA weights) predicts its held-out fo
 * **DINOv2 ViT-B/14** (self-supervised, LVD-142M; round 28) fine-tuned at 126×238, the images' own aspect ratio (9×17 patches), with lr 5e-5, layer-wise lr decay 0.8, 2 warm-up + 13 cosine epochs and HUD dropout. Alone it is the most robust model on zoomed, darkened and partly hidden frames (fold 0: 70% zoom 0.974 against 0.971 for the other seven together), and it counts three times in the average (weight chosen nested on full / zoom / HUD-hidden views: +0.0006 over equal weights, 5/5 folds). An earlier run of the same backbone with lr 1.5e-5 and decay 0.65 for 10 epochs reached only 0.940: the recipe, not the backbone, was the problem.
 * A **logistic probe on frozen CLIP + DINOv2 + SigLIP 2 features** (round 27) is mixed in at 10%.
 
-**Why HUD dropout.** Occluding parts of validation images shows that the first two models read mostly the on-screen HUD, above all the bottom control strip: with only the centre of the frame visible, fold-0 accuracy falls from 0.988 to 0.934 (PUBE Mobile 0.890). The test images the models are unsure about (crowds, dark frames, menus) often have no HUD. HUD dropout hides, with probability 0.5 per training image, the bottom strip, the top strip and corners, or all borders, or zooms into the central 60–75% (`task4.GPUAugment._hud`). On the same fold-0 validation images it keeps full-frame accuracy (0.9878 → 0.9872, difference inside noise) and raises centre-only accuracy to 0.961 (+0.027, 95% CI [+0.022, +0.033]; PUBE 0.944) and accuracy on a natural 70% centre zoom from 0.961 to 0.968 (+0.008, CI [+0.004, +0.012]). Averaging a normal and a HUD-dropout model is best or near-best on every view (`experiments/claude/cm_r19_t4_hud_eval.py`).
+**Why HUD dropout.** Occluding parts of validation images shows that the first two models read mostly the on-screen HUD, above all the bottom control strip: with only the centre of the frame visible, fold-0 accuracy falls from 0.988 to 0.934 (PUBE Mobile 0.890). This shortcut is measured on training images: a model that needs the HUD fails on any frame without one (menus, crowds, zoomed or cropped captures). HUD dropout hides, with probability 0.5 per training image, the bottom strip, the top strip and corners, or all borders, or zooms into the central 60–75% (`task4.GPUAugment._hud`). On the same fold-0 validation images it keeps full-frame accuracy (0.9878 → 0.9872, difference inside noise) and raises centre-only accuracy to 0.961 (+0.027, 95% CI [+0.022, +0.033]; PUBE 0.944) and accuracy on a natural 70% centre zoom from 0.961 to 0.968 (+0.008, CI [+0.004, +0.012]). Averaging a normal and a HUD-dropout model is best or near-best on every view (`experiments/claude/cm_r19_t4_hud_eval.py`). (Provenance: the idea was also prompted by low-confidence test frames that looked HUD-less, round 19; the decision rests on the training-image results above.)
 
 Class-wise multipliers are tuned on the OOF blend for macro-F1 and kept only if they also help **nested** (chosen on four folds, scored on the fifth): in round 18 the in-sample gain of +0.0006 turned into −0.0002 nested.
 
-**Balanced-prior decision rule (v17).** Training is 39% 7-Eleven Knights, so the networks' posterior carries that prior and an ambiguous frame falls back to the largest class, while macro-F1 weighs the five classes equally. The final label is $\hat y=\arg\max_c p_c\,\pi_c^{-\alpha}$ with the training shares $\pi$ and $\alpha = 0.75$ (logit adjustment, Menon et al., 2021). $\alpha$ was fixed from training images only (`experiments/claude/cy_r23_t4_prior_temp.py`, `df_r25_t4_prior_stack.py`): on OOF subsamples where 7-Eleven Knights is 20% of the set, $\alpha = 0.75$ beats plain argmax in 98–100% of 200 draws (full frames 0.9875 → 0.9880, 70% zoom 0.9690 → 0.9703, HUD hidden 0.9567 → 0.9613); at the training mix it costs 0.0013 (full) to 0.0021 (zoom), and on HUD-less frames $\alpha$ = 0.25–0.5 gains even at the training mix. The rule is therefore a bet that the test class mix is flatter than training. No test label, test image or test prediction enters $\alpha$ or $\pi$; 949 test labels change against plain argmax, and the public score rose from 0.85035 to 0.85507 (about +0.024 on Task 4), far more than the simulated gain, which says most ambiguous test frames had been given to the largest class.
+**Balanced-prior decision rule (v17).** The training set is imbalanced: 39.4% of the images are 7-Eleven Knights, against 10.1–18.8% for each of the other four games, and the task slides (p. 21) warn: "Watch for class imbalance in images". A network trained with cross-entropy learns $p(c\mid x)\propto p(x\mid c)\,\pi_c$, so the training prior $\pi$ pulls every ambiguous frame towards the largest class, while macro-F1 weighs the five classes equally. Logit adjustment (Menon et al., ICLR 2021) removes the prior: $\hat y=\arg\max_c p_c\,\pi_c^{-\alpha}$ with the training shares $\pi$, where $\alpha = 1$ is the Bayes rule for balanced error and $\alpha = 0$ plain argmax. We use $\alpha = 0.75$, fixed from training images only (`experiments/claude/cy_r23_t4_prior_temp.py`, `df_r25_t4_prior_stack.py`): on OOF subsamples where 7-Eleven Knights is 20% of the set, $\alpha = 0.75$ beats plain argmax in 98–100% of 200 draws (full frames 0.9875 → 0.9880, 70% zoom 0.9690 → 0.9703, HUD hidden 0.9567 → 0.9613); at the training mix it costs 0.0013 (full) to 0.0021 (zoom), and on HUD-less frames $\alpha$ = 0.25–0.5 gains even at the training mix. The rule therefore accepts a small loss if the test set has exactly the training mix in exchange for a gain if it is more balanced. No test label, test image or test prediction enters $\alpha$ or $\pi$. On the public leaderboard the switch scored 0.85035 → 0.85507. (Provenance: the switch was first considered in round 23, after the class mix predicted on the test images differed from training; that diagnostic was removed after the TA ruling of 15 Nov 2026, see `experiments/claude/FINDINGS.md`.)
 
 Two more backbones were tried and dropped on OOF evidence:
 * EfficientNetV2-S diverged at lr 3e-4 (epoch-0 loss above uniform).
-* DINOv2 ViT-S/14 (self-supervised, at 154×308, lr 5e-5, wider zoom augmentation 0.7–1.3) reached only 0.9705 macro-F1 on fold 0, versus 0.986 / 0.985 for the two kept backbones. Adding it lowered the fold-0 ensemble at every weight tried (0.9878 → 0.9863 at 1/3 weight, 0.9874 at 0.2), and it was *less* confident on test images, not more. Its run was stopped after fold 0 (`outputs/preds/t4_dino_fold0.npz`).
+* DINOv2 ViT-S/14 (self-supervised, at 154×308, lr 5e-5, wider zoom augmentation 0.7–1.3) reached only 0.9705 macro-F1 on fold 0, versus 0.986 / 0.985 for the two kept backbones. Adding it lowered the fold-0 ensemble at every weight tried (0.9878 → 0.9863 at 1/3 weight, 0.9874 at 0.2). Its run was stopped after fold 0 (`outputs/preds/t4_dino_fold0.npz`).
 
-**Why a second architecture? A test-set shift.** The next cell compares the models' confidence on test images against held-out training images. Test images are visibly harder: far more low-confidence predictions and lower agreement between fold models. They also show a different class mix, with fewer 7-Eleven Knights screenshots. So the OOF macro-F1 is an *optimistic* estimate of leaderboard performance. The shift is not a low-level one: binned by brightness, saturation, contrast or the black rotation border, test confidence is lower in *every* bin. The test images mostly show content (scenes, maps, menus) that the training set does not cover. Ensembling architecturally different models is the standard remedy that stays within the rules, and ViTs are known to be more robust to distribution shift than CNNs. We deliberately do **not** apply transductive label-shift correction (EM prior re-estimation on test predictions, Saerens et al. 2002), because it would adapt the model using test data.
+**Why several architectures?** CNNs, supervised ViTs and self-supervised ViTs make different mistakes on the held-out training images (per-backbone table above), so averaging them reduces variance, and ViTs are known to be more robust to distribution shift than CNNs. We deliberately do **not** apply transductive label-shift correction (EM prior re-estimation on test predictions, Saerens et al. 2002), because it would adapt the model using test data.
+
+*Note on test data.* Earlier versions of this notebook compared the models' confidence and predicted class mix on the test images with the OOF predictions. After the TA ruling of 15 Nov 2026 (test statistics may not shape the validation design or the choice of augmentation), those diagnostics were removed; every check in this notebook now uses training data only, and test images are used only to produce the submission.
 """)
 code(r"""
 y4 = t4_train.label.values
@@ -703,28 +707,9 @@ plt.tight_layout(); savefig(fig, "t4_confusion"); plt.show()
 summary.append(["Task 4", "macro-F1", SCORE4, f"{' + '.join(T4_TAGS)} 5-fold, GPU aug + Mixup/CutMix, EMA, h-flip TTA{' + 10% frozen-feature probe' if HAS_PROBE4 else ''}, balanced-prior rule (alpha 0.75)"])
 """)
 code(r"""
-# Distribution-shift diagnostics: held-out train images (OOF) vs test images
-fold_preds = {tag: [np.load(C.PRED_DIR / f"t4_{tag}_fold{f}.npz")["test_probs"].argmax(1) for f in range(N_FOLDS)] for tag in T4_TAGS}
-rows = []
-for tag in T4_TAGS:
-    fp = fold_preds[tag]
-    agree = np.mean([np.mean(fp[i] == fp[j]) for i in range(N_FOLDS) for j in range(i + 1, N_FOLDS)])
-    rows.append([tag, (oof_tag[tag].max(1) < 0.7).mean(), (test_tag[tag].max(1) < 0.7).mean(), agree])
-for i, a in enumerate(T4_TAGS):
-    for b in T4_TAGS[i + 1:]:
-        rows.append([f"{a} vs {b} (test)", np.nan, np.nan, np.mean(test_tag[a].argmax(1) == test_tag[b].argmax(1))])
-display(pd.DataFrame(rows, columns=["model", "OOF share max-p<0.7", "TEST share max-p<0.7", "pairwise fold agreement on TEST"]).set_index("model").round(4))
-
-fig, axes = plt.subplots(1, 2, figsize=(12, 3.3))
-bins = np.linspace(0.2, 1.0, 41)
-axes[0].hist(oof4.max(1), bins=bins, color=CAT[0], alpha=0.75, density=True, label="held-out train (OOF)")
-axes[0].hist(test4.max(1), bins=bins, color=CAT[1], alpha=0.6, density=True, label="test")
-axes[0].set_xlabel("max class probability"); axes[0].set_title("Confidence drops on test: covariate shift"); axes[0].legend(loc="upper left")
-xs = np.arange(5); wdt = 0.38
-axes[1].bar(xs - wdt / 2, np.bincount(y4, minlength=5) / len(y4), wdt, color=CAT[0], label="train labels", **viz.bar_gap())
-axes[1].bar(xs + wdt / 2, np.bincount(pred4, minlength=5) / len(pred4), wdt, color=CAT[1], label="test predictions", **viz.bar_gap())
-axes[1].set_xticks(xs); axes[1].set_xticklabels(C.T4_CLASS_NAMES, fontsize=8); axes[1].set_title("Class mix: prior shift"); axes[1].legend()
-plt.tight_layout(); savefig(fig, "t4_shift"); plt.show()
+# Diversity of the members on held-out TRAINING images: pairwise agreement of their OOF labels (test images are not used)
+agree4 = pd.DataFrame([[np.mean(oof_tag[a].argmax(1) == oof_tag[b].argmax(1)) for b in T4_TAGS] for a in T4_TAGS], index=T4_TAGS, columns=T4_TAGS)
+display(agree4.round(4))
 """)
 
 md(r"""
@@ -1178,7 +1163,7 @@ md(r"""
 The prediction distributions are consistent with the training priors, with a few explainable departures:
 * **Task 1** flags more players than the 35% base rate, because the $F_2$-optimal threshold trades precision for recall.
 * **Task 3** predicts *exact zeros* for roughly the non-spender share, thanks to the median-consistent gate, while keeping whales' scale, so the mean stays close to the training mean.
-* **Task 4**'s class mix differs from training. This is the prior shift diagnosed in §7.4, not a pipeline error: the same code reproduces the training mix on OOF predictions.
+* **Task 4**'s predicted shares differ from the training shares; the balanced-prior rule (§7.4) contributes by moving ambiguous frames away from the largest class.
 """)
 
 # =================================================================== 10. conclusion
@@ -1214,9 +1199,8 @@ For Tasks 1–4, the final test predictions average the 5-fold models with model
 * **Metric averaging.** The macro-vs-positive-class choice for $F_2$ moves the optimal Task 1 threshold. We follow the slides (positive class). If the TAs confirm macro, flip `FBETA_AVERAGE` and re-run.
 * **Task 1** uses 13k unlabeled training rows only implicitly. Semi-supervised learning on *training* rows (never test) is a natural next step, as are a focal-loss LightGBM objective and monotone constraints for interpretability.
 * **Task 3** could add distributional GBDTs (quantile regression at the mixture-median level, or NGBoost-style log-normal heads) to replace the constant-σ log-normal assumption.
-* **Task 4** test images show a covariate shift (unseen scenes, lower confidence) and a class-prior shift relative to training, so the leaderboard will likely sit below the OOF score. Next steps:
-  * larger or CLIP-pretrained backbones, which are known to be more shift-robust (DINOv2 ViT-B/14 with a proper fine-tuning recipe is now the strongest member; CLIP / SigLIP / EVA02 ViT-B with the same recipe are the next candidates);
-  * multi-scale/multi-crop TTA;
-  * if the rules permit transductive post-processing, EM label-shift correction of the class priors.
+* **Task 4:** the leaderboard arithmetic puts Task 4 near 0.90, below the 0.99 OOF score, so the test images are harder than the held-out training images. Next steps:
+  * larger or CLIP-pretrained backbones, which are known to be more shift-robust (DINOv2 ViT-B/14 with a proper fine-tuning recipe is now the strongest member; EVA02 ViT-B with the same recipe passed the training-data check as a ninth member, +0.0005, but scored 0.85939 against 0.85948 without it and was removed; SigLIP 2 ViT-B stayed below them on fold 0);
+  * multi-scale TTA did not help on held-out training images: adding central-85% zoom views to the original and flipped view lowered the ensemble by 0.0003 to 0.0012 (`experiments/claude/eg_r29_t4_tta4.py`).
 * **Task 5:** with a small analyst-labelled sample, the fusion weights and contamination level could be calibrated directly, and a temporal autoencoder could model the 4-period sequences.
 """)
