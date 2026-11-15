@@ -9,6 +9,7 @@ Data preparation follows the notebook (reduce_mem_usage on the training frames o
 Task 1: 8 of the 9 stack members (LogReg is deterministic, cached). Task 2 (clean pipeline only; the v12 column is the id block): LightGBM, XGBoost, CatBoost.
 Task 3: hurdle stages 1 and 2 and the four ratio stage-2 models that carry 99.9% of the blend weight; zero-weight members stay cached.
 """
+import os
 import sys
 import time
 import warnings
@@ -24,7 +25,7 @@ from src.modeling import fit_fixed, fit_predict, make_folds  # noqa: E402
 from src.utils import load_preds, reduce_mem_usage  # noqa: E402
 
 SEEDS = (42, 100, 2026, 777, 999, 1234, 5555, 8888, 31415, 27182)
-DIR = OUT / "r14_bag"
+DIR = OUT / os.environ.get("BAG_DIR", "r14_bag")   # round 27: BAG_DIR=r27_bag for the re-released Task 2 data
 DIR.mkdir(exist_ok=True)
 T0 = time.time()
 log = lambda *a: print(f"[{(time.time() - T0) / 60:6.1f} min]", *a, flush=True)

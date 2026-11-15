@@ -35,8 +35,17 @@ ARCH = {"cnxt_hud": ("convnext_tiny.in12k_ft_in1k", (160, 320)), "cnxt_grid": ("
         "siglip2_hud": ("vit_base_patch16_siglip_224.v2_webli", (160, 320)), "cnxtS_hud": ("convnext_small.in12k_ft_in1k", (160, 320)),
         "cnxt": ("convnext_tiny.in12k_ft_in1k", (160, 320)), "deit3": ("deit3_small_patch16_384.fb_in22k_ft_in1k", (192, 384)),
         "cnxt22k_hud": ("convnext_tiny.fb_in22k", (160, 320)), "effv2_hud": ("tf_efficientnetv2_s.in21k_ft_in1k", (160, 320)),
-        "deit3_hud": ("deit3_small_patch16_384.fb_in22k_ft_in1k", (192, 384))}
-ENS = ["cnxt", "deit3", "cnxt_hud", "cnxt22k_hud", "effv2_hud", "deit3_hud", "cnxtS_hud"]
+        "deit3_hud": ("deit3_small_patch16_384.fb_in22k_ft_in1k", (192, 384)),
+        "swinT_hud": ("swin_tiny_patch4_window7_224.ms_in22k_ft_in1k", (224, 448)),
+        "cnxt_col": ("convnext_tiny.in12k_ft_in1k", (192, 384)),                     # round 27: grey 0.3, colour jitter 0.8 x gain 1.6
+        "dinov2_hud": ("vit_base_patch14_reg4_dinov2.lvd142m", (196, 392)),          # round 27: DINOv2-B fine-tuned, layer decay 0.65
+        "dinov2_v2": ("vit_base_patch14_reg4_dinov2.lvd142m", (126, 238)),           # round 28: lr 5e-5, layer decay 0.8, 15 epochs, native aspect
+        "eva02B": ("eva02_base_patch14_448.mim_in22k_ft_in22k_in1k", (126, 238)),    # round 28: the dinov2_v2 recipe
+        "siglip2_v2": ("vit_base_patch16_siglip_224.v2_webli", (128, 240)),          # round 28: the dinov2_v2 recipe
+        "dinov2_r2": ("vit_base_patch14_reg4_dinov2.lvd142m", (252, 476))}           # round 29: dinov2_v2 at 2x size (18x34 patches), lr 4e-5
+ENS = ["cnxt", "deit3", "cnxt_hud", "cnxt22k_hud", "effv2_hud", "deit3_hud", "cnxtS_hud", "dinov2_v2"]      # v20: eight members (v21 rolled back)
+MEMBER_W = {"dinov2_v2": 3.0}                                        # v20: the fine-tuned DINOv2 counts three times
+REPLACES = {"dinov2_r2": "dinov2_v2"}                                # round 29: also scored in place of this member, at its weight
 OUT = Path("experiments/claude/outputs/r22_views")
 OUT.mkdir(parents=True, exist_ok=True)
 OBJ = ["full", "zoom70"]
@@ -97,7 +106,7 @@ for t in tags:
     if (OUT / f"{t}_fold0.npz").exists():
         continue
     name, size = ARCH[t]
-    m = task4.create_model(name, pretrained=False, img_size=size if name.split("_")[0] in ("vit", "deit3", "eva02") else None)
+    m = task4.create_model(name, pretrained=False, img_size=size if name.split("_")[0] in ("vit", "deit3", "eva02", "swin", "swinv2") else None)
     m = m.cuda().to(memory_format=torch.channels_last)
     m.load_state_dict(torch.load(MODEL_DIR / f"t4_{t}_fold0.pt", map_location="cuda"))
     m.eval()
@@ -111,7 +120,7 @@ for t in P:
     P[t]["real_hard"] = P[t]["full"]
 mf1 = lambda yy, p: f1_score(yy, p.argmax(1), average="macro")
 ens = [t for t in ENS if t in P]
-avg = lambda ts, v: np.mean([P[t][v] for t in ts], 0)
+avg = lambda ts, v: np.sum([MEMBER_W.get(t, 1.0) * P[t][v] for t in ts], 0) / sum(MEMBER_W.get(t, 1.0) for t in ts)
 cols = list(VIEWS) + ["real_hard"]
 score = lambda ts, v: mf1(yv[hard], avg(ts, v)[hard]) if v == "real_hard" else mf1(yv, avg(ts, v))
 print(f"fold-0 validation images {len(va)}; real dark/low-contrast subset {hard.sum()}; current ensemble = {'+'.join(ens)}")
@@ -139,16 +148,49 @@ for c in [c for c in CANDS if c in P]:
     print(f"  {c:12s} objective {pt_obj:+.4f} [{np.quantile(d_obj, .025):+.4f}, {np.quantile(d_obj, .975):+.4f}]  full {pt_full:+.4f}  "
           f"real_hard {pt_hard:+.4f}  -> {'PASS' if ok else 'fail'}")
 
-# Label-free diagnostic on test images (fold-0 models' test probabilities; reported only, never used to decide: being confident on
-# a test image is not the same as being right on it).
-ent = lambda p: -(p * np.log(np.clip(p, 1e-12, 1))).sum(1)
-TP = {t: np.load(PRED_DIR / f"t4_{t}_fold0.npz")["test_probs"] for t in tags if (PRED_DIR / f"t4_{t}_fold0.npz").exists()}
-if all(t in TP for t in ens):
-    pe = np.mean([TP[t] for t in ens], 0)
-    unsure = pe.max(1) < 0.6
-    print(f"\ntest images where the current ensemble's fold-0 models are unsure (max prob < 0.6): {unsure.sum()} of {len(pe)}")
-    for t in ["cnxt_hud"] + CANDS:
-        if t in TP:
-            agree = (TP[t].argmax(1) == pe.argmax(1))
-            print(f"  {t:12s} entropy on them {ent(TP[t][unsure]).mean():.3f} (elsewhere {ent(TP[t][~unsure]).mean():.3f}); "
-                  f"agrees with the ensemble on {agree[unsure].mean():.3f} of them, {agree[~unsure].mean():.3f} elsewhere")
+# Round 26: the same comparison under the pipeline's decision rule since v17 (argmax p * pi^-0.75, pi = training shares), scored at
+# the training mix and at a uniform class mix (rows weighted 0.2 / pi). Same bootstrap resamples.
+pi = np.bincount(y, minlength=5) / len(y)
+wb = (0.2 / pi)[yv]
+rule = lambda ts, v: (avg(ts, v) * pi ** -0.75).argmax(1)
+print("\nunder the v17 rule (alpha 0.75): macro-F1 at the training mix / at a uniform mix; objective = mean over full and zoom70")
+for r, ts in rows.items():
+    tm = [f1_score(yv, rule(ts, v), average="macro") for v in OBJ + ["centre_grey"]]
+    um = [f1_score(yv, rule(ts, v), average="macro", sample_weight=wb) for v in OBJ + ["centre_grey"]]
+    print(f"  {r:30s} training mix full {tm[0]:.4f} zoom70 {tm[1]:.4f} centre {tm[2]:.4f} obj {np.mean(tm[:2]):.4f} | "
+          f"uniform mix full {um[0]:.4f} zoom70 {um[1]:.4f} centre {um[2]:.4f} obj {np.mean(um[:2]):.4f}")
+allr = np.arange(len(va))
+for c in [c for c in CANDS if c in P]:
+    a = {v: rule(ens, v) for v in OBJ}
+    b = {v: rule(ens + [c], v) for v in OBJ}
+    for label, w in [("training mix", None), ("uniform mix", wb)]:
+        f = lambda pred, i: f1_score(yv[i], pred[i], average="macro", sample_weight=None if w is None else w[i])
+        pt = np.mean([f(b[v], allr) - f(a[v], allr) for v in OBJ])
+        d = [np.mean([f(b[v], i) - f(a[v], i) for v in OBJ]) for i in boot]
+        print(f"  ensemble + {c} minus ensemble, {label}: objective {pt:+.4f} [{np.quantile(d, .025):+.4f}, {np.quantile(d, .975):+.4f}]; "
+              f"labels changed full {np.mean(a['full'] != b['full']):.3%}, zoom70 {np.mean(a['zoom70'] != b['zoom70']):.3%}")
+    # Round 27 criterion: mean gain over full + zoom70 + HUD hidden at a uniform class mix, under the v17 rule.
+    # Since v19 the pipeline mixes in the frozen-feature probe at 10%; the criterion is scored on that fused ensemble.
+    V3 = OBJ + ["centre_grey"]
+    zp = np.load("experiments/claude/outputs/r27/t4_probe_views.npz")
+    fus = lambda ts, v: ((0.9 * avg(ts, v) + 0.1 * zp[f"probe-aug_{v}"][va]) * pi ** -0.75).argmax(1)
+    a3, b3 = {v: fus(ens, v) for v in V3}, {v: fus(ens + [c], v) for v in V3}
+    f3 = lambda pred, i: f1_score(yv[i], pred[i], average="macro", sample_weight=wb[i])
+    per = [f3(b3[v], allr) - f3(a3[v], allr) for v in V3]
+    d3 = [np.mean([f3(b3[v], i) - f3(a3[v], i) for v in V3]) for i in boot]
+    print(f"  (ensemble + {c}) + 10% probe minus ensemble + 10% probe, uniform mix, three views: {np.mean(per):+.4f} [{np.quantile(d3, .025):+.4f}, {np.quantile(d3, .975):+.4f}] "
+          f"(full {per[0]:+.4f}, zoom70 {per[1]:+.4f}, HUD hidden {per[2]:+.4f})")
+    if c in REPLACES and REPLACES[c] in ens:
+        old = REPLACES[c]
+        MEMBER_W[c] = MEMBER_W.get(old, 1.0)
+        rep = [c if t == old else t for t in ens]
+        for label, ts, ref in [(f"{c} in place of {old} (weight {MEMBER_W[c]:g})", rep, ens),
+                               (f"{c} alongside {old}, both at weight {MEMBER_W[c]:g}", ens + [c], ens)]:
+            ar, br = {v: fus(ref, v) for v in V3}, {v: fus(ts, v) for v in V3}
+            per = [f3(br[v], allr) - f3(ar[v], allr) for v in V3]
+            d3 = [np.mean([f3(br[v], i) - f3(ar[v], i) for v in V3]) for i in boot]
+            print(f"  {label}, + 10% probe, uniform mix, three views: {np.mean(per):+.4f} [{np.quantile(d3, .025):+.4f}, {np.quantile(d3, .975):+.4f}] "
+                  f"(full {per[0]:+.4f}, zoom70 {per[1]:+.4f}, HUD hidden {per[2]:+.4f})")
+        MEMBER_W.pop(c)
+
+# (Until 2026-11-15 a label-free diagnostic on test images followed here; removed after the TA ruling on test data.)

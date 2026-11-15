@@ -119,3 +119,82 @@ def build(train, test):
         Xtr[c] = pd.Categorical(Xtr[c], categories=cats)
         Xte[c] = pd.Categorical(Xte[c], categories=cats)
     return Xtr, y, Xte
+
+
+# ---------------------------------------------------------------- KDE naive Bayes (round 21 / 27)
+def kde_nb_predict(train, y, fit_rows, apply_frames, n_grid=2048):
+    """Generative member: class-conditional naive Bayes with smooth marginals, fitted on `train.iloc[fit_rows]` only.
+
+    Rounds 19 and 23 found the features to be independent given the segment, so the product of per-feature class densities is close
+    to the Bayes rule. Per class and continuous / count column: a Gaussian kernel density (Silverman bandwidth, on a grid spanning
+    the fitted rows' values) for the interior plus point masses at the clip bounds (min / max holding >= 0.2% of the values).
+    Columns with <= 12 distinct values: Laplace-smoothed class frequencies. Missing cells are skipped (MCAR). Noise and nominal
+    columns are left out. Nothing from `apply_frames` enters the fit. Returns class probabilities for each frame in `apply_frames`."""
+    drop = [ID_COL, "id", TARGET, *NOISE_COLS, *NOMINAL_COLS]
+
+    def prep(df):
+        D = df.drop(columns=[c for c in drop if c in df.columns]).copy()
+        for c, m in ORDINAL_MAPS.items():
+            D[c] = D[c].map(m).astype(float)
+        return D
+
+    R = prep(train)
+    cat = [c for c in R.columns if R[c].nunique() <= 12]
+    cont = [c for c in R.columns if c not in cat]
+    XR, CR = R[cont].values.astype(float), R[cat].values.astype(float)
+    A = [prep(f) for f in apply_frames]
+    Xs, Cs = [a[cont].values.astype(float) for a in A], [a[cat].values.astype(float) for a in A]
+    y = np.asarray(y)
+    tr = np.asarray(fit_rows)
+    yt = y[tr]
+    outs = [np.tile(np.log(np.bincount(yt, minlength=4) / len(yt)), (len(X), 1)) for X in Xs]
+    for j in range(len(cat)):
+        vals = np.unique(CR[tr, j][~np.isnan(CR[tr, j])])
+        for k in range(4):
+            v = CR[tr, j][yt == k]
+            cnt = np.array([(v == u).sum() for u in vals]) + 1.0
+            lp = np.log(cnt / cnt.sum())
+            for o, C_ in zip(outs, Cs):
+                idx = np.minimum(np.searchsorted(vals, C_[:, j]), len(vals) - 1)
+                ok = vals[idx] == C_[:, j]                                 # NaN and unseen values contribute nothing
+                o[ok, k] += lp[idx[ok]]
+    for j in range(len(cont)):
+        col = XR[tr, j]
+        obs = col[~np.isnan(col)]
+        lo, hi = obs.min(), obs.max()
+        lo_m = lo if np.mean(obs == lo) >= 0.002 else -np.inf
+        hi_m = hi if np.mean(obs == hi) >= 0.002 else np.inf
+        grid = np.linspace(lo, hi, n_grid)
+        step = grid[1] - grid[0]
+        for k in range(4):
+            v = col[yt == k]
+            v = v[~np.isnan(v)]
+            a, b = v == lo_m, v == hi_m
+            pa, pb = (a.sum() + 0.5) / (len(v) + 1), (b.sum() + 0.5) / (len(v) + 1)
+            inner = v[~a & ~b]
+            sd = min(inner.std(), np.subtract(*np.percentile(inner, [75, 25])) / 1.34) or inner.std()
+            h = 0.9 * sd * len(inner) ** -0.2
+            H = np.histogram(inner, bins=np.append(grid - step / 2, grid[-1] + step / 2))[0].astype(float)
+            kk = np.arange(-int(4 * h / step) - 1, int(4 * h / step) + 2) * step
+            dens = np.convolve(H, np.exp(-0.5 * (kk / h) ** 2), mode="same")
+            dens = np.maximum(dens, dens.max() * 1e-6)
+            dens /= dens.sum() * step
+            for o, X in zip(outs, Xs):
+                x = X[:, j]
+                m = ~np.isnan(x)
+                l = np.log(1 - pa - pb) + np.log(np.interp(x[m], grid, dens))
+                l = np.where(x[m] == lo_m, np.log(pa), l)
+                o[m, k] += np.where(x[m] == hi_m, np.log(pb), l)
+    res = []
+    for o in outs:
+        P = np.exp(o - o.max(1, keepdims=True))
+        res.append(P / P.sum(1, keepdims=True))
+    return res
+
+
+def kde_nb_cv(train, test, y, folds):
+    """Out-of-fold KDE naive Bayes probabilities on `folds` and test probabilities from a fit on all training rows."""
+    oof = np.zeros((len(y), 4))
+    for tr, va in folds:
+        oof[va] = kde_nb_predict(train, y, tr, [train.iloc[va]])[0]
+    return {"oof": oof, "test": kde_nb_predict(train, y, np.arange(len(y)), [test])[0]}

@@ -84,7 +84,7 @@ class GPUAugment:
     def __init__(self, p_affine=0.6, max_rot=25, scale=(0.85, 1.15), max_shift=0.08, max_shear=8,
                  randaug_chunk=8, p_jitter=0.5, p_invert=0.15, p_gray=0.05, p_noise=0.4,
                  max_noise=0.10, p_blur=0.2, p_erase=0.2, p_hud=0.0, hud_zoom=(0.60, 0.75),
-                 p_grid=0.0, grid_cover=(0.65, 0.85)):
+                 p_grid=0.0, grid_cover=(0.65, 0.85), jitter_gain=1.0):
         self.__dict__.update(locals())
         del self.__dict__["self"]
         self.randaug = v2.RandAugment(num_ops=2, magnitude=9)
@@ -126,11 +126,12 @@ class GPUAugment:
         B, dev = x.shape[0], x.device
         on = self._bern(self.p_jitter, B, dev)[:, None, None, None]
         r = lambda lo, hi: (lo + torch.rand(B, device=dev) * (hi - lo))[:, None, None, None]
-        y = x * r(0.7, 1.3)                                                     # brightness
+        g = self.jitter_gain                                                    # 1 = the original ranges (round 27: 1.6 = strong jitter)
+        y = x * r(1 - 0.3 * g, 1 + 0.3 * g)                                     # brightness
         gray = (0.299 * y[:, 0] + 0.587 * y[:, 1] + 0.114 * y[:, 2]).unsqueeze(1)
-        y = (y - gray.mean((2, 3), keepdim=True)) * r(0.7, 1.3) + gray.mean((2, 3), keepdim=True)  # contrast
+        y = (y - gray.mean((2, 3), keepdim=True)) * r(1 - 0.3 * g, 1 + 0.3 * g) + gray.mean((2, 3), keepdim=True)  # contrast
         gray = (0.299 * y[:, 0] + 0.587 * y[:, 1] + 0.114 * y[:, 2]).unsqueeze(1)
-        y = gray + (y - gray) * r(0.6, 1.4)                                     # saturation
+        y = gray + (y - gray) * r(1 - 0.4 * g, 1 + 0.4 * g)                     # saturation
         # hue: rotate the chroma plane in YIQ space by a per-sample angle in [-pi, pi]
         T = torch.tensor([[0.299, 0.587, 0.114], [0.596, -0.274, -0.322], [0.211, -0.523, 0.312]], device=dev)
         Ti = torch.linalg.inv(T)
@@ -240,14 +241,15 @@ class GPUAugment:
 # ImageNet-normalised tensors everywhere; for these models a forward pre-hook maps them to the model's own mean/std.
 # Older members (incl. EfficientNetV2 and EVA02, fine-tuned on ImageNet-normalised input) are deliberately left as trained.
 NATIVE_NORM = {"vit_base_patch16_siglip_224.v2_webli", "vit_base_patch16_siglip_224.webli",
-               "eva02_base_patch16_clip_224.merged2b", "vit_base_patch16_clip_224.openai"}
+               "eva02_base_patch16_clip_224.merged2b", "vit_base_patch16_clip_224.openai",
+               "eva02_base_patch14_448.mim_in22k_ft_in22k_in1k"}       # round 28 (CLIP mean / std in its pre-trained config)
 
 
 def create_model(name, num_classes=5, pretrained=True, drop_path=0.1, img_size=None):
     import timm
     kw = {}
-    if img_size is not None and name.split("_")[0] in ("vit", "deit3", "deit", "eva02"):
-        kw["img_size"] = tuple(img_size)        # ViTs: resample position embeddings to the 2:1 token grid
+    if img_size is not None and name.split("_")[0] in ("vit", "deit3", "deit", "eva02", "swin", "swinv2"):
+        kw["img_size"] = tuple(img_size)        # ViTs: resample position embeddings to the 2:1 token grid (Swin: window grid)
     model = timm.create_model(name, pretrained=pretrained, num_classes=num_classes, drop_path_rate=drop_path, **kw)
     if name in NATIVE_NORM:
         cfg = model.pretrained_cfg
@@ -290,7 +292,7 @@ def predict_paths(model, paths, img_size, bs=128, tta=True, chunk=4096):
 
 def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epochs=10, bs=64,
                lr=2e-4, wd=0.05, label_smoothing=0.1, mix_prob=0.8, seed=42, log=print, ckpt_path=None, aug_kw=None,
-               class_balanced=False, layer_decay=None, grad_ckpt=False):
+               class_balanced=False, layer_decay=None, grad_ckpt=False, warmup_epochs=1):
     """Train one fold on the shared preloaded uint8 array `arr` (rows tr_idx); returns
     (model carrying the final EMA weights, history). With an empty `va_idx` it trains on all given
     rows without per-epoch validation (final Train+Val refit). class_balanced=True draws each epoch's rows with
@@ -324,7 +326,7 @@ def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epo
             g["lr"] = lr * g.pop("lr_scale", 1.0)
         opt = torch.optim.AdamW(groups, lr=lr, weight_decay=wd)
     n_steps_ep = len(tr_idx) // bs
-    steps, warm = epochs * n_steps_ep, n_steps_ep
+    steps, warm = epochs * n_steps_ep, warmup_epochs * n_steps_ep      # linear warm-up, then cosine (default: 1 epoch)
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda s: (s + 1) / warm if s < warm else 0.5 * (1 + math.cos(math.pi * (s - warm) / max(1, steps - warm))))
     aug = GPUAugment(**(aug_kw or {}))
