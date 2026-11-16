@@ -1821,3 +1821,124 @@ HUD hidden 0.9639, gamma 3.5 0.9356, 75% grid 0.8836 at a uniform mix under the 
   (`vit_large_patch14_reg4_dinov2.lvd142m`, lr 3e-5, layer decay 0.85, 15 epochs, HUD dropout 0.5, gradient checkpointing), and
   DINOv2-Base with photometric robustness (MixStyle, or more grey / colour jitter) aimed at the dark, colour-cast and low-contrast
   frames.
+
+## Round 31 (2026-11-16): v23-based Task 4 evaluation and the GPU queue after `dinov2_r2`
+* `fc_r31_t4_v23_eval.py cand ...`: scores a candidate against v23 (eight members, DINOv2 x8, HUD-dropout members x3, plain members
+  x1; rule, uniform mix, members only) on each view separately and on the **real dark / low-contrast training frames** (lowest
+  decile of grey-level contrast or of brightness, from `outputs/r30/t4_errors.npz`; 4,159 frames = 13.2%; v23 scores 0.9746 there
+  against 0.9894 on all full frames). Variants: added at weight 2 / 4 / 8, in place of dinov2_v2, and (dinov2_v2, candidate)
+  weights in {0, 4, 8} x {0, 2, 4, 8} chosen nested. Works on the folds a candidate has (fold-0 tests).
+* **v24 check, fixed before the all-fold run of `dinov2_r2`:** pooled delta > 0 on zoom70, on HUD hidden and on the dark /
+  low-contrast frames, full >= -0.0005, on top of the hard-view rule; the queue uses the nested-weight variant for the full-refit
+  decision. v23 base numbers: full 0.9894, zoom70 0.9760, HUD hidden 0.9643, gamma 3.5 0.9362, 75% grid 0.8880.
+* `em_r30_t4_hardviews.py`: candidates without a checkpoint for some folds get views for the folds they have, scoring left to
+  `fc_r31`; ARCH gains `dinov2L` and `dinov2_photo`.
+* MixStyle in `train_fold` hooks `model.stages` (CNNs only), so the photometric DINOv2-B run (`dinov2_photo`) uses the other option
+  of the brief: greyscale 0.2, colour jitter 0.8 (dinov2_v2 recipe otherwise). DINOv2-L (303M parameters): weights, gradients,
+  AdamW states and the EMA copy take about 5.65 GiB in fp32 before activations, so a smoke test (bs 64, gradient checkpointing)
+  must show peak reserved memory below 7.3 GiB before the fold-0 run starts.
+* Queue (one GPU job at a time): wait for `dinov2_r2` folds 1-4 -> views + v23-based scores -> full refit only if the nested
+  variant passes both checks -> smoke test -> DINOv2-L fold 0 (if it fits) -> DINOv2-B photometric fold 0 -> their views and scores.
+
+## Round 31, Task 5 (user brief of 2026-11-16 morning; label-free, Task 5 has only test.csv; CPU at idle priority, 4 threads)
+Reference data for item 3: the first release of test.csv (2026-11-03, git commit 99ed4b9), whose anomalies were the id block
+P023819-P025888 (2,070 accounts, 259 of them the volatility type outside the gap families). Used only to check a method after it
+was chosen label-free; nothing is tuned on it.
+
+**Item 3, shape and cut-off of the dependence pocket** (`ff_r31_t5_pocket_density.py`, `ff2_r31_t5_pocket3d.py`). Scores on the
+accounts outside the gap families, in rank space; density ratio = cross-fitted smoothed-histogram ratio in normal-score space
+(each account scored by the fit on the other random half; 20 repeats), i.e. the copula density, whose level sets are the
+Neyman-Pearson regions against the independence null; 1 - 1/r is the local posterior (Efron's local fdr). Expected F3 counts the
+gap families as true, with one common group size G for all scores.
+| score (competition data unless marked) | k* | est. precision | expected F3 | first release: F3 vs id block (k*) |
+|---|---|---|---|---|
+| min-rank, 2 columns (pipeline) | 339 | 0.57 | 0.9785 (G 226) | 0.9830 (k* 323; oracle k 0.9833) |
+| Fisher / Stouffer, 2 columns | 247 / 307 | 0.55 / 0.56 | 0.940 / 0.954 (G 261) | 0.9660 / 0.9778 |
+| density ratio, 2 columns, h 0.15 / 0.25 / 0.40 | 236 / 301 / 360 | 0.73 / 0.59 / 0.53 | 0.958 / 0.958 / 0.962 (G 261) | 0.9719 / 0.9779 / 0.9783 |
+| min-rank, 3 columns (+ performance_stability) | 490 | 0.46 | 0.971 (G 261) | 0.9785 |
+| **density ratio, 3 columns, h 0.40** | **263** | **0.85** | **0.9965 (G 226)** | **0.9889** (k* 279; oracle 0.9897) |
+* The pocket is a 3-column pattern: among the top 263 the mean rank is kda_std 0.98, accuracy_std 0.97, performance_stability
+  0.87 and 0.47-0.53 for every other *_level column; the first release's 259 true members show the same three (0.95 / 0.94 / 0.84).
+  The pipeline's pair scan picked only the first two, and its square corner then admits accounts that are high in both by chance.
+* Null check: outside the pairwise upper corners the three columns have Spearman -0.06 to -0.07, the value independent uniforms
+  give with the same cut (-0.056); among the first release's true normals -0.003 / -0.000 / -0.004. Independence holds.
+* In 2 columns the density ratio does not beat min-rank (the corner shape fits there); the gain comes from the third column read
+  through the density ratio (min-rank in 3 columns is worse).
+* Bandwidth: h 0.30-0.60 gives k* 263-267, expected F3 0.9957-0.9980; first release 0.9882-0.9892. Cross-fitting seeds: k*
+  260-268, Jaccard of the flagged sets 0.970-0.996 (first release 0.853-0.970). 80% subsamples: k* 274 +- 30 (min-rank 370 +- 41).
+* Against the pipeline's 339: keeps 246, drops 93, adds 17 (263 flags; total 2,072 instead of 2,148). On the first release the same
+  operation drops 84 accounts of which 1 is anomalous and adds 24 of which 8 are: precision of the pocket 0.71 -> 0.85.
+* The posterior rule (flag where 1 - 1/r > F3 / 10) flags 526-581 accounts and is worse (expected 0.972; first release 0.9796): the
+  smoothed ratio spreads the pocket's mass into the neighbouring normal region, so its level is biased up near the pocket; the
+  expected-F3 cut-off is the better rule. Bootstrap uncertainty of min-rank's k*: 382 +- 67, flat expected F3 between 340 and 450.
+* Size of the gain: +0.006 F3 on the first release (~+0.0012 on the public score if the re-release behaves the same); label-free
+  +0.018 expected F3 on the competition data. Not merged: Task 5 is locked at v23 until the user decides.
+
+**Item 1, scans inside yes/no-flag subpopulations and 3-way tail cubes** (`fd_r31_t5_subpop_scan.py`; U = the 23,741 unflagged
+accounts; null for a subpopulation S = random subsets of U of the same size, because outside the families the flags are
+independent of the features, round 23).
+| subpopulation of U | n | B1 1-D gaps: max lambda in S (null max over columns: median / max) | B2 pockets in S: max z / shuffle noise | B3 S vs rest: max z (null median / max) |
+|---|---|---|---|---|
+| password_changed | 1,100 | 32.1 (24.7 / 32.2) | 5.32 / 5.15 | 6.12 (6.23 / 7.32) |
+| vpn_usage | 3,443 | 82.9 (75.1 / 143.7) | 4.85 / 4.79 | 6.34 (6.22 / 6.65) |
+| suspicious_login_time | 1,145 | 16.4 (28.7 / 44.7) | 5.48 / 5.17 | 5.55 (6.19 / 6.62) |
+| mass_item_sale | 469 | 14.8 (16.0 / 30.5) | 5.17 / 5.12 | 6.58 (6.45 / 8.03) |
+| new device in period 4 | 5,417 | 20.4 (128 / 172) | 5.99 / 6.15 | 6.16 (6.14 / 6.62) without device_count columns |
+| more guild changes in period 4 than before | 5,353 | 20.4 (125 / 188) | 9.96 / 12.01 | 6.18 (6.35 / 6.72) without guild_changes columns |
+* Columns where S's largest gap beats the maximum of its own column's 20 null draws: 20, 14, 13, 8, 13, 9 (expected by chance
+  259 / 21 = 12.3 each). The B2 exceedances are 0.06-0.33 z above a 3-shuffle noise level, cells of 15-30 accounts with 10-17 in
+  excess; the column-shuffle noise ignores the natural dependence of the real columns, so these are not evidence.
+* The first B3 run gave z 19.3 for the guild subgroup on `guild_changes_burst`: the subgroup is defined by guild_changes_4, so its
+  own derived columns separate it by construction; without them it is at the null (6.18 vs 6.35 / 6.72). The new-device subgroup
+  is at the null with or without device_count columns. (The large null gap maxima of these two rows come from the same defining
+  columns, which random subsets do not condition on.)
+* 3-way cubes: 56 features (level and period-4 deviation of each behaviour, 2 geo) in 4 categories, 10,144 cross-category triples
+  x 8 top / bottom decile corners. Independence z max 4.54 (column-shuffled data 5.13); Kirkwood z (pairwise dependence kept) max
+  3.83 (Gaussian copula 4.03). Nothing above the noise.
+* No hidden group inside any flag subpopulation and no 3-condition group.
+
+**Item 4, trajectory shape and change points** (`fg_r31_t5_trajectory.py`; 24 continuous behaviours as pooled normal scores,
+period medians removed; null = each account's four periods in random order, 10 draws).
+| statistic | beyond the null's 99% (real / null) | 99.9% | 99.99% | upper-tail gap lambda (real / null max) |
+|---|---|---|---|---|
+| accel4 = sudden period-4 change after steady 1-3 | 61 / 237.5 | 5 / 23.8 | 1 / 2.4 | 0 / 27.8 |
+| CUSUM break, max over t = 2, 3, 4 | 349 / 237.5 | 27 / 23.8 | 3 / 2.4 | 0 / 0 |
+| break at period 3 / period 4 | 247 / 49 vs 237.5 | 23 / 9 vs 23.8 | 4 / 2 vs 2.4 | 0 / 40.6, 0 / 29.1 |
+| Mahalanobis of the break vector, t = 3 / t = 4 | 225 / 11 vs 237.5 | 21 / 6 vs 23.8 | 4 / 2 vs 2.4 | 0 / 32.4, 0 / 13.5 |
+| direction: steady drift (cos) / ping-pong (-cos) | 85 / 280 vs 237.5 | 4 / 28 vs 23.8 | 0 / 2 vs 2.4 | 0 / 25.3, 15.3 / 16.0 |
+* No excess of period-3 or period-4 breaks; the break period of the accounts beyond the null's 99.9% is 15 / 5 / 7 (t = 2 / 3 / 4)
+  against 9.0 / 4.2 / 10.6. The top 200 by Mahalanobis distance share no direction (mean pairwise cosine +0.014 at t = 3 and t = 4;
+  null +0.002 / +0.021). The small break_max excess at the 99% level sits at t = 2 (period 1 odd), not where a takeover would be.
+* Period 4 has a strong deficit of breaks (61 vs 237.5 for accel4): the unflagged accounts change less into period 4 than the
+  exchangeable null implies, which makes the period-permuted null conservative for period 4. Step-size check: the median
+  |step| in normal scores is 0.351 (1->2), 0.326 (2->3), 0.275 (3->4), smaller into period 4 for 23 of 24 behaviours, and the
+  same in all 25,889 accounts (0.344 / 0.321 / 0.272): a property of how the data were generated, not of the flag selection.
+* Power: 150 copied accounts shifted by d within-account SDs in 6 of the 24 behaviours: from period 3, d = 1 / 1.5 / 2 put 2 / 5 /
+  14 of 150 beyond the null's 99.9% of the Mahalanobis statistic; from period 4, 0 / 1 / 1. Omnibus 24-dimensional statistics
+  dilute a 6-behaviour shift; a strong shift in one behaviour is what the 1-D gap scans already catch. So item 4 rules out a
+  coherent change-point group, not a weak one.
+
+**Item 2, feature-wise conditional prediction residuals** (`fe_r31_t5_conditional_resid.py`, `fe2_r31_t5_resid_selfnull.py`,
+`fe3_r31_t5_resid_surplus.py`; ALSO-style, Paulheim & Meusel 2015: each period-4 behaviour predicted from periods 1-3 of itself,
+all periods of the other behaviours, statics and flags; LightGBM Huber, 5-fold out of fold on U; residuals in MAD units).
+* The Gaussian-copula null does not calibrate residual tails: real residuals are heavy-tailed (non-linear, heteroscedastic,
+  zero-inflated columns), copula residuals near-Gaussian, so 4,119 real accounts exceed the copula's 99.9% quantile of S2 (24
+  expected). Not evidence of anything; discarded as a null.
+* Self-null (the same models predicting period 3 instead of 4): the period-4 tails are heavier: S2 beyond the period-3 99.9%
+  quantile 106 vs 24, |r| > 6 MAD 1,549 vs 776, largest surpluses in purchase_amount_mean, friend_adds / removes, skill_trajectory,
+  location_changes. **The first release shows the same surplus (86 vs 24; 1,591 vs 798) and 85 of its 86 surplus accounts are
+  normal by the id block.** It is the calmer period 4 (item 4: steps into period 4 are 16-22% smaller), which narrows the residual
+  core so the same surprises are larger in MAD units, not a hidden group. On the competition data the surplus accounts share no
+  direction (mean pairwise cosine +0.060; period-3 tail +0.082) and have normal flag rates except suspicious_login_time 0.109 vs
+  0.051 (about 6 accounts in excess; 0.012 on the first release).
+* Upper-tail gaps of the residual scores: largest lambda 28.6 (kda_std), 22.2 (purchase_frequency), 19.0 (economy+), below the
+  gap families' lambda >= 50 and within the null maxima of item 4 (13-41).
+* Power: 150 copied accounts with purchase_amount_mean_4 and currency_transfers_4 raised to their 85-95th percentile (not extreme
+  in either column): 74 of 150 land in the top 1% of the economy residual, 43 in the top 1% of S2. The method can see a
+  context-inconsistent group of that size; none is there.
+* On the first release the pipeline leaves 24 true anomalies among the unflagged accounts; the residual tails catch 1 of them.
+
+**Round 31 Task 5 summary.** Items 1, 2 and 4 find no group outside the 2,148 flags (each with a null and, for 2 and 4, a power
+check). Item 3 finds a better reading of the existing pocket: the cross-fitted 3-column density ratio (accuracy_std,
+kda_std, performance_stability) with the expected-F3 cut-off, 263 flags instead of 339, +0.006 F3 on the first release's id block
+and +0.018 expected F3 (label-free) on the competition data. Task 5 stays at v23 until the user decides.
