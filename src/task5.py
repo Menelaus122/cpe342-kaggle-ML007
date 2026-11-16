@@ -526,32 +526,74 @@ class DensityRatio:
         return out / len(self.fits)
 
 
-def pocket_density_ratio(X, known, cols, h=0.40, reps=20, n_perm=300, max_k=3000, seed=SEED):
-    """Pocket score = cross-fitted density ratio of `cols` (normal scores of the ranks among the accounts not in `known`), with the
-    same shuffle-null estimate of the true members among the top k as pocket_detector (null points are scored with a random half's
-    fit). Returns (account indices in score order, est_TP curve of length max_k, score of the accounts not in `known`)."""
+def density_ratio_curve(V, h=0.40, reps=200, n_perm=1000, max_k=3000, seed=SEED, block=100):
+    """Cross-fitted density-ratio score of the rows of V (rows x d, d = 2, 3 or 4; NaN sits at the median) with the shuffle-null
+    estimate of the true members among the top k.
+
+    Normal scores of the ranks; histogram bins of 0.05 / 0.1 / 0.2 SD for d = 2 / 3 / 4, Gaussian smoothing of h SD on the observed
+    counts and on the expected counts of independent columns. Each of `reps` random halvings fits one map per half; a row is scored
+    by the map of the half it is NOT in, and the maps are discarded after use (streaming), so hundreds of halvings fit in memory.
+    Null: `n_perm` column shuffles, fixed in advance; every null row is scored by a random half's map in every halving.
+    Defaults (round 32): 200 halvings and 1000 null draws; with v24's 20 / 300 the cut-off moved by up to 25 accounts between seeds,
+    with 200 / 1000 k* is 263-265 over five seeds (Jaccard 0.9925-1.000, mean 0.997).
+    Returns (row order by score, est_TP curve of length max_k, score)."""
+    from functools import reduce
+    from scipy.ndimage import gaussian_filter
     from scipy.stats import norm
     rng = np.random.default_rng(seed)
-    known = np.asarray(known, bool)
-    rest = np.where(~known)[0]
-    n = len(rest)
-    Rk = X.loc[~known, cols].rank(method="first").to_numpy()
-    Z = np.nan_to_num(norm.ppf((Rk - 0.5) / n))                       # a missing value sits at the median
-    D = DensityRatio(Z, h, rng, reps)
-    S = D.score(Z)
+    V = np.asarray(V, float)
+    n, d = V.shape
+    Rk = pd.DataFrame(V).rank(method="first").to_numpy()
+    Z = np.nan_to_num(norm.ppf((Rk - 0.5) / n))
+    w = {2: 0.05, 3: 0.1, 4: 0.2}[d]
+    edges = np.arange(-4.2, 4.2 + 1e-9, w)
+    nb = len(edges) - 1
+    p = np.diff(norm.cdf(np.r_[-np.inf, edges[1:-1], np.inf]))
+    sig = h / w
+    eps = 0.5 / ((2 * np.pi) ** (d / 2) * sig ** d)
+    fE1 = gaussian_filter(reduce(np.multiply.outer, [p] * d), sig, mode="constant").ravel()      # smoothed expected counts per row
+
+    def flat(Zx):
+        idx = np.clip(((np.clip(Zx, -4.199, 4.199) + 4.2) / w).astype(int), 0, nb - 1)
+        return np.ravel_multi_index(tuple(idx.T), (nb,) * d)
+
+    fi = flat(Z)
+    NI = np.stack([flat(_shuffle_columns(Z, rng)) for _ in range(n_perm)]).astype(np.int32)
+    S = np.zeros(n)
+    SN = np.zeros((n_perm, n), np.float32)
+    for _ in range(reps):
+        half = rng.random(n) < 0.5
+        maps = []
+        for m in (half, ~half):
+            H = np.bincount(fi[m], minlength=nb ** d).reshape((nb,) * d).astype(float)
+            maps.append(np.log((gaussian_filter(H, sig, mode="constant").ravel() + eps) / (m.sum() * fE1 + eps)))
+        LA, LB = maps
+        S += np.where(half, LB[fi], LA[fi])
+        for j in range(0, n_perm, block):
+            idx = NI[j:j + block]
+            SN[j:j + block] += np.where(rng.random(idx.shape) < 0.5, LB[idx], LA[idx])
+    S /= reps
     order = np.argsort(-S)
     Ss = S[order]
     cnt = np.zeros(n)
-    for _ in range(n_perm):
-        Zp = _shuffle_columns(Z, rng)
-        Sp = np.sort(D.score(Zp, [rng.random(n) < 0.5 for _ in D.fits]))
+    for j in range(n_perm):
+        Sp = np.sort(SN[j].astype(float) / reps)
         cnt += n - np.searchsorted(Sp, Ss, side="left")
     cnt /= n_perm
     est = np.maximum.accumulate(np.arange(1, n + 1) - cnt)
-    return rest[order], est[:max_k], S
+    return order, est[:max_k], S
 
 
-def pocket_refine(X, known, pocket, pinfo, feats, max_k=3000, beta=3.0, seed=SEED):
+def pocket_density_ratio(X, known, cols, h=0.40, reps=200, n_perm=1000, max_k=3000, seed=SEED):
+    """Pocket score = density_ratio_curve of `cols` over the accounts not in `known`.
+    Returns (account indices in score order, est_TP curve of length max_k, score of the accounts not in `known`)."""
+    known = np.asarray(known, bool)
+    rest = np.where(~known)[0]
+    order, est, S = density_ratio_curve(X.loc[~known, cols].to_numpy(float), h, reps, n_perm, max_k, seed)
+    return rest[order], est, S
+
+
+def pocket_refine(X, known, pocket, pinfo, feats, max_k=3000, beta=3.0, seed=SEED, reps=200, n_perm=1000):
     """Second pass of the pocket: (a) one more column if the provisional pocket is shifted in it (pocket_extra_column), then (b) the
     cross-fitted density ratio of the pocket columns against the min-rank score. The two est_TP curves are compared at ONE common
     group size (the larger estimate, so a weak score is not rewarded for under-estimating the group); the score with the higher
@@ -563,7 +605,7 @@ def pocket_refine(X, known, pocket, pinfo, feats, max_k=3000, beta=3.0, seed=SEE
     if extra is None:
         return np.asarray(pocket, bool), {**pinfo, **info}
     cols = list(feats) + [extra]
-    order_r, est_r, _ = pocket_density_ratio(X, known, cols, max_k=max_k, seed=seed)
+    order_r, est_r, _ = pocket_density_ratio(X, known, cols, reps=reps, n_perm=n_perm, max_k=max_k, seed=seed)
     est_m = pinfo["curve"].est_tp.to_numpy()
     n_known, b2 = int(known.sum()), beta ** 2
     G = max(float(est_m.max()), float(est_r.max()))

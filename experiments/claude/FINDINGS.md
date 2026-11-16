@@ -1971,3 +1971,96 @@ identical to the standalone check. **Uploaded once with the user's approval (11:
 `submission.csv` = v24.
 After the upload (user request): `task5.score_autoencoder` always trains on the CPU (the `device` argument is ignored) and the
 notebook no longer passes the GPU. Task 5 notebook re-executed: autoencoder 42.7 s on the CPU, `task5.csv` byte-identical to v24.
+
+## Round 32 (2026-11-16 afternoon): Task 5 deeper on the CPU (user brief after v24 = 0.86135)
+v24 committed and merged (`dabcaa8`, PR #6). At about 13:50 Claude Code stopped the background dinov2_r2 training (fold 3, epoch 4;
+folds 0-2 done, their predictions saved) and the round-31 GPU queue because the system ran critically low on memory; not
+restarted pending the user.
+
+**Item 3, Monte Carlo variance of the pocket cut-off** (`fh_r32_t5_stable_cutoff.py`). `task5.density_ratio_curve` streams the
+cross-fitting halvings (one pair of maps at a time; null rows pre-drawn as flat bin indices), so 200 halvings and 1,000 null draws
+run in about 6 minutes and 240 MB. Agreement with the old class at 200 halvings: Spearman 0.993 (the rest is Monte Carlo noise in
+near-tied bulk scores), top-280 overlap 279. Five master seeds (42, 1-4) per setting:
+
+| setting | competition data: k* | Jaccard min / mean | in every / any seed | expected F3 | first release: k* | Jaccard min / mean | reference F3 (mean) |
+|---|---|---|---|---|---|---|---|
+| 20 halvings, 300 null draws (v24) | 263, 263, 265, 264, 259 | 0.977 / 0.989 | 259 / 265 | 0.9964-0.9983 | 294, 313, 291, 293, 262 | 0.837 / 0.920 | 0.9878-0.9893 (0.9887) |
+| 200, 300 | 260, 265, 265, 265, 265 | 0.981 / 0.993 | 260 / 265 | 0.9980-0.9981 | 291, 298, 299, 291, 305 | 0.954 / 0.975 | 0.9886-0.9893 (0.9890) |
+| **200, 1000** | **265, 265, 263, 265, 265** | **0.9925 / 0.997** | 263 / 265 | 0.9978-0.9981 | 287, 297, 295, 296, 293 | 0.966 / 0.982 | 0.9890-0.9895 (0.9892) |
+
+* 200 / 1000 is the only setting with mean Jaccard above the user's 0.995 target on the competition data (the minimum, 0.9925, is
+  263 vs 265 accounts). It is now the default of `density_ratio_curve`, `pocket_density_ratio` and `pocket_refine`.
+* The stable cut-off on the competition data is k* 263-265, not v24's 288 (seed 42 of the old estimator was the high end of its
+  263-288 range). A pipeline rerun would flag about 2,074 accounts (1,809 + about 265): the 23 lowest-ranked of v24's pocket drop.
+* No accuracy gain to expect: on the first release the mean reference F3 moves 0.9887 -> 0.9892 (within the seed range of the old
+  setting, 0.9878-0.9893), and the first release stays less stable (its est_TP curve is flatter at the cut-off).
+
+**Item 1, every column and every period for the pocket** (`fi_r32_t5_pocket_columns.py`; pocket = `pocket_refine` with the new
+defaults: k 265 on the competition data, 287 on the first release).
+* A. Regression-adjusted rank shift on all 292 other columns (all derived features incl. flags and statics, every raw period column),
+  Bonferroni bound 4.64. **Other behaviours: none** (largest |z| 3.4, device_count_cv; first release 3.8, ip_hash_entropy_2; the
+  first release's true pocket members: largest 3.1). There is no 4th dimension, so D (4-D ratio) did not run. Own behaviours: the
+  within-account spread of all three (cv, maxjump, burst) is far LOWER than their level predicts (performance_stability_cv z -19.7,
+  accuracy_std_cv -15.9, kda_std_cv -10.8; first release the same, -19.7 / -17.5 / -10.5): the group is high in every period.
+* B. Persistence. Pocket vs normal accounts at the same level (all three level ranks > 0.8, outside the pocket, 166): periods in
+  the top 20% accuracy_std 3.80 vs 2.71, kda_std 3.75 vs 2.73, lowest period rank 0.82 / 0.80 vs 0.69 / 0.68 (performance_stability
+  2.66 vs 2.68, no difference). First release (reference), v24 pocket true (240) vs false (47) members: accuracy_std 3.80 vs 2.81
+  periods, lowest period rank 0.81 vs 0.64; kda_std 3.82 vs 2.77, 0.82 vs 0.59; the false members are also lower in level (0.84 vs
+  0.98, 0.78 vs 0.98). The user's hypothesis holds: real members are persistently high, false members reach the corner with fewer
+  high periods.
+* C. But no simple per-account aggregate that encodes persistence beats the mean over periods (common group size; first release
+  reference F3 / pocket precision):
+
+| aggregate of the three behaviours | competition: group, k, est. precision, expected F3 | first release: k, ref F3, pocket precision |
+|---|---|---|
+| mean over periods (v24 `_level`) | 224, 265, 0.846, **0.9782** | 287, **0.9895**, **0.836** |
+| median over periods | 250, 295, 0.731, 0.9727 | 298, 0.9827, 0.762 |
+| mean of per-period normal scores | 210, 300, 0.694, 0.9689 | 303, 0.9829, 0.753 |
+| second-lowest period rank (high in >= 3 of 4) | 270, 296, 0.734, 0.9734 | 269, 0.9807, 0.818 |
+
+  (Expected F3 here is at the common group size 270, set by the second-lowest-rank score, hence lower than item 3's values.)
+  The mean averages four noisy periods; order statistics keep less of the signal than they gain from persistence.
+* A valid way to add persistence on top of the level needs a different null: a level and a spread of the SAME behaviour are
+  dependent for normal accounts, so a column-shuffle null would count that dependence as group members. Candidate (not run): a
+  cross-fitted classifier density ratio on the 12 per-period columns (3 behaviours x 4 periods) against a null that shuffles whole
+  behaviour blocks across accounts (keeps each behaviour's period dependence, removes only the cross-behaviour excess).
+
+**Item 2, multi-column signatures at the edges of the six gap families** (`fj_r32_t5_family_edges.py`; first run in
+`outputs/r32/fj_t5_family_edges_first_run.log`). Signature of a family = up to 8 columns of other behaviours whose mean rank in
+the family differs from the unflagged accounts U beyond the Bonferroni bound (one per behaviour), Stouffer sum of normal scores.
+* Signatures are strong for four families (share of members above U's 99th signature percentile: skill boost + friend purge 1.00,
+  bots 1.00, near-inactive 1.00, takeover / VPN 0.63, silent 0.69) and weak for the erratic-stability family (0.15; first release 0.27).
+* (1) Missed members at the edges. The first run had two dependence artefacts: the near-inactive family (edge z +15 to +18, 13-25
+  above U99) had activity_level_level in its signature (the helper mapped "activity_level_*" to "activity", so the family's own
+  behaviour was not excluded; Spearman with the gap column -0.50 to -0.53), and login_count_3 < 14.65 (z +8.8; geo_km_per_login_4 is
+  computed from the login count, Spearman -0.23). On the first release those near-inactive edge zones held 0 true anomalies. Fixed
+  (longest temporal-group prefix; geo and login_count treated as one behaviour) and rerun: for every gap column (33 on the
+  competition data, 31 on the first release) the 1% of U nearest the cut on the bulk side has the signature distribution of the rest
+  of U: z -2.3..+1.6 (first release -1.6..+1.1), accounts above U's 99th percentile 0-8 against 2.3 expected, Spearman(signature,
+  column) within +-0.02; on the first release these edge zones hold 0-3 true anomalies each (at most 6 accounts in all; 19 missed accounts spread at
+  random over U would put about 0.18 in each zone, 5.6 over the 31; the largest, 3 below purchase_frequency_4 > 8.165, is 3 of 226).
+* Tail of each signature inside U against a shuffle null of its columns (accounts above U's own 99.9% / 99% quantile): at the null
+  for skill boost (24 vs 20.3 +- 4.5), near-inactive (24 vs 26.4), silent (24 vs 23.3), bots (24 vs 17.8 +- 4.3) and erratic
+  stability (24 vs 20.5 +- 4.3; 239 vs 221 +- 12 at 99%). The takeover / VPN signature shows 24 vs 1.9, but it contains n_flags,
+  the sum of the other flag columns in it (password_changed, mass_item_sale, vpn_usage), so a column-shuffle null is invalid there;
+  on the first release its top 0.1% / 1% hold 0 / 1 true anomalies. On the first release the erratic-stability family has no
+  login_count gap, so its signature keeps login_count_level and geo_km_per_login_4 (one built from the other): 24 vs 8.2 +- 2.8,
+  again a dependence artefact, though its top 0.1% / 1% hold 3 / 6 true anomalies (next bullet).
+* (2) False members at the edges. The 10% of each family nearest its cut carry the same signature as the rest (share below U's
+  median 0.00-0.02 in both releases); on the first release their precision is 1.000 for every gap column. The gap families have no
+  false members to trim; the first release's 47 false flags are all in the pocket (flagged precision 0.978, recall 0.991).
+* Where the first release's 19 unflagged true anomalies sit (reference only; 24 before v24's pocket): none has a high pocket score
+  (0 above U's 99th percentile; their three pocket-column ranks look normal). 7 of 19 have a family signature above U's 99th
+  percentile (about 1 expected), 6 of them the erratic-stability family's (purchase_frequency_level high, login_count_level low,
+  account_age_days high), 3 even above 99.9%, but none is near the behavior_stability cut (0 true anomalies in its 1% edge zone).
+  They look like erratic-stability members without the low stability value. Not usable without labels: they are 6 of the 238 U
+  accounts above that 99th percentile (precision 0.025, far below the F*/10 = 0.1 bar); even U's top 0.1% (about 24 accounts, 3
+  true) would sit near the bar, and an excess of 3 in 24 is invisible against Poisson noise (+-5) on the competition data.
+
+**Round 32 summary.** Item 3: 200 halvings / 1,000 null draws make the pocket cut stable (k* 263-265, Jaccard mean 0.997), now the
+`src/task5.py` default; the stable cut is about 265 instead of v24's 288, worth about 0 on the first release (0.9887 -> 0.9892,
+inside the old seed range). Item 1: no column of another behaviour is shifted in the pocket (no 4th dimension); the group is
+persistently high in every period (and its false members are not), but no simple per-account aggregate uses that better than the
+mean over periods. Item 2: the six gap families have neither missed members at their edges nor false members near their cuts; the
+first release's 19 missed anomalies are not pocket members, and 6 of them carry the erratic-stability signature without the low
+stability value, too few to separate from normal accounts without labels. No submission built (user: keep the src defaults only).
