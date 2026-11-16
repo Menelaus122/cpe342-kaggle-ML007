@@ -2112,6 +2112,14 @@ classifier ratio on the whole period profile against a block-shuffle null beats 
 (expected F3 0.9987-0.9989 against 0.9935; first-release reference 0.9905-0.9911 against 0.9895) and is in `task5.pocket_refine`
 for v25.
 
+* Seed stability at the pipeline default (40 halvings / 200 draws; `outputs/r32/fk_t5_pocket_12d_reps40.log`, finished after the v25
+  upload): seeds 42 / 1 / 2 give k 244 / 242 / 247, estimated group 234 / 233 / 234, precision 0.956 / 0.963 / 0.946, expected F3
+  0.9993 / 0.9992 / 0.9993 (3-D ratio 0.9937); Jaccard between seeds 0.992, 0.988, 0.980 (mean 0.987; 20 halvings: 0.981). Below the
+  0.995 the 3-D ratio reached with 200 halvings: 2-5 borderline accounts of 244 move with the seed (about +-0.0001 F3). Seed 42 is
+  the pipeline's run (k 244, the v25 flags).
+
+* User decision (2026-11-16 ~21:50): keep 40 halvings (k 244, mean Jaccard 0.987); no further halvings.
+
 ### v25 (user decision, 2026-11-16 ~19:10: build and upload before the GPU queue ends)
 v25 = v24 with the Task 5 pocket from item 4 (pipeline default: 40 halvings, 200 block-shuffle draws, seed 42). `task5/task5.ipynb`
 re-executed: `pocket_refine` compares min-rank (k 339, est. precision 0.574, expected F3 0.976), the 3-D ratio (265, 0.846, 0.994)
@@ -2144,3 +2152,141 @@ fold dropping hard (floor -0.0005; Task 3 -0.0002). Base = v24 (Task 1 F2 0.8388
 * Sub-threshold rows are 0.24-0.27% of the rows (mean target 16-21 THB against a mean prediction of 24-27 THB); the training
   folds pick "no rule" in all five folds.
 * Task 3 stays at its measured ceiling (rounds 13, 17, 30): nothing to add to v25.
+
+**Task 1, item 1: level-2 combiner trained on a soft F2** (`fl_r33_t1_softf2.py`; base = the v22 level 2 nested, F2 0.83872 /
+0.83853 / 0.83849 / 0.83859 on the pipeline folds and stacker split seeds 1, 2, 3; 36 minutes at 2 threads, of which 15 for the base).
+
+| candidate | delta on the four splits | folds better | worst fold | verdict |
+|---|---|---|---|---|
+| A linear soft-F2 on 9 log-odds + 31 missing indicators + count (cut from the other folds) | -0.0022 -0.0024 -0.0017 -0.0016 | 0 0 0 0 | -0.0025 -0.0034 -0.0033 -0.0021 | fail |
+| A at its built-in cut (score > 0) | -0.0023 -0.0025 -0.0025 -0.0025 | 1 0 0 0 | -0.0035 -0.0038 -0.0042 -0.0032 | fail |
+| B linear + residual MLP (16 tanh units, 3 seeds) | -0.0021 -0.0023 -0.0011 -0.0016 | 0 0 0 0 | -0.0024 -0.0031 -0.0023 -0.0021 | fail |
+| C mean of the v22 level 2 and A (standardised) | -0.0009 -0.0006 -0.0004 -0.0006 | 0 0 2 1 | -0.0017 -0.0013 -0.0013 -0.0012 | fail |
+| D linear soft-F2 on the nine log-odds only | -0.0018 -0.0015 -0.0013 -0.0012 | 0 0 0 0 | -0.0027 -0.0025 -0.0023 -0.0024 | fail |
+
+* Training on the soft F2 is clearly worse than the log-loss in every fold (-0.0012 to -0.0025): the soft F2 is dominated by the
+  rows far from the cut, and a linear combiner loses the tree meta-models' interactions. The F2-optimal rule is a cut on the
+  posterior, so the best posterior (log-loss) plus one cut-off is already the right decomposition.
+* The exact cut-off search and `optimize_threshold` agree (0.83870 vs 0.83872 etc.), so the cut-off search is not a limit.
+
+**Task 1, items 2 and 3: k-NN label purity in the skill space, RuleFit** (`fo_r33_t1_knn_rulefit.py`).
+
+| candidate | pooled mean delta | folds better | worst fold | verdict |
+|---|---|---|---|---|
+| 2 k-NN purity on 10 skill columns (normal scores; Euclidean k = 15 / 50 / 150, cosine k = 50; neighbours' cheater rate and rate minus their mean member probability; out of bag in every outer fold) as 8 inputs of the tree meta-models | -0.00029 | 1 2 3 0 | -0.00096 -0.00067 -0.00092 -0.00076 | fail |
+| 3 RuleFit (leaves of 200 depth-3 trees + linear terms, L1 logistic; 146-178 of 1,662 terms kept) as a tenth member | +0.00009 | 3 4 3 3 | -0.00029 -0.00016 -0.00072 -0.00031 | fail (fold floor) |
+
+* The neighbours' cheater rate correlates 0.33 with the label, but what the members do not already predict is nil: the
+  correlation of (neighbour rate - neighbours' mean member probability) with (label - member mean) is -0.001 to -0.004 on the
+  held-out rows. The neighbourhood holds no label information beyond the nine members, in a 10-column skill space as in round 4's
+  all-column space.
+* RuleFit alone reaches F2 0.8323 and its log-odds correlate 0.94-0.97 with the tree members (0.70 with the logistic member): a
+  sparse re-expression of the same trees.
+
+**Task 2** (`fm_r33_t2_gam_dirichlet.py`; reference = the v20 blend nested as in `ev_r30`: 0.7573 / 0.7572 / 0.7564 / 0.7574 on
+the pipeline folds and stacker split seeds 1, 2, 3; 108 minutes at 2 threads). Alone (argmax, no multipliers): spline GAM 0.7548
+(log-loss 0.6220), GAM + 6 tensor pairs 0.7528 (0.6250), KDE naive Bayes 0.7560 (0.6251).
+
+| candidate | delta on the four splits | folds better | worst fold | verdict |
+|---|---|---|---|---|
+| 1a spline GAM as a 5th stack member | -0.0003 -0.0001 +0.0001 -0.0006 | 2 3 3 1 | -0.0019 -0.0011 -0.0008 -0.0026 | fail |
+| 1a GAM + tensor pairs as a 5th stack member | +0.0001 -0.0004 +0.0008 -0.0006 | 3 3 4 1 | -0.0017 -0.0022 -0.0002 -0.0016 | fail |
+| 1b GAM as a third blend term (weight nested) | +0.0004 +0.0002 +0.0008 -0.0000 | 2 2 3 1 | 0 -0.0003 0 -0.0001 | fail (weight 0 picked in most folds) |
+| 1b GAM + pairs as a third blend term | +0.0003 +0.0004 +0.0004 -0.0001 | 2 2 3 0 | -0.0002 0 -0.0005 -0.0005 | fail |
+| 2a KDE naive Bayes Dirichlet-calibrated | +0.0002 +0.0002 +0.0010 +0.0001 | 4 4 4 3 | -0.0008 -0.0017 -0.0000 -0.0011 | fail (fold floor) |
+| 2b both calibrated, log-linear blend | +0.0004 +0.0001 +0.0011 +0.0003 | 4 3 5 3 | -0.0007 -0.0019 +0.0001 -0.0011 | fail (fold floor) |
+| 3 Whale factor (PC1 of vip_tier, monthly spending, frequency, rare items) class-conditional KDE, lambda 0.5 | -0.0002 -0.0001 +0.0008 -0.0004 | 3 2 4 1 | -0.0023 -0.0017 -0.0012 -0.0012 | fail |
+| 3 Whale factor, lambda 1 | -0.0004 -0.0002 +0.0003 -0.0000 | 2 2 3 3 | -0.0024 -0.0028 -0.0017 -0.0011 | fail |
+
+* The GAM is a fourth view of the same additive structure (the features are independent given the segment, rounds 19 and 23):
+  its log-loss equals the naive Bayes's, the tensor pairs make it worse, and the nested blend weight is 0 in most folds.
+* Dirichlet calibration is the only candidate with a positive mean on all four splits (+0.0004 / +0.0005) and 3-5 folds better,
+  but single folds drop by 0.0007-0.0019, beyond the -0.0005 floor: 20 parameters per model, then a Powell search of the class
+  multipliers on a step function. Round 34 tests the two-parameter version and smoother multiplier searches.
+* The Whale factor adds a dependence between four spending columns that the stacker's trees already use; no gain.
+
+## Round 34 (2026-11-16 night): fold-to-fold swings of round 33 and further untried methods (user brief of ~20:10)
+CPU at idle priority beside the GPU training (epoch 11 took 1,874 s with both CPU jobs suspended for 80% of it, against
+1,625-1,653 s with them running: the CPU jobs do not slow the trainer; fold 4 later ran at about 860 s per epoch with three CPU
+jobs running). Acceptance as in round 33.
+
+**Task 2** (`fr_r34_t2_calib.py`; reference = the v20 blend nested, 0.7571 / 0.7572 / 0.7568 / 0.7573; 55 minutes at 3 threads).
+The pipeline's naive Bayes was rebuilt per feature (max |dp| 8.5e-07 against `t2_kde_nb.npz`).
+
+| candidate | delta on the four splits | folds better | worst fold | verdict |
+|---|---|---|---|---|
+| 1a(i) log-linear blend, two exponents (alpha/T1, (1-alpha)/T2) by the log-loss | -0.0012 -0.0012 -0.0006 -0.0012 | 0 0 1 1 | -0.0023 -0.0019 -0.0022 -0.0037 | fail |
+| 1a(ii) log-linear blend, weight by the macro-F1 | +0.0000 -0.0002 +0.0001 -0.0006 | 3 3 3 3 | -0.0006 -0.0017 -0.0005 -0.0022 | fail |
+| 1b one-vs-rest naive Bayes, no clipping (control) | -0.0002 -0.0001 -0.0006 -0.0003 | 2 2 1 2 | -0.0015 -0.0007 -0.0014 -0.0028 | fail |
+| 1b winsorised log-likelihood ratios, M nested in (2, 3, 4) | -0.0000 +0.0003 +0.0004 +0.0003 | 3 3 3 3 | -0.0009 -0.0003 -0.0004 -0.0015 | fail |
+| 1b winsorised, M = 3 | -0.0001 -0.0006 +0.0000 +0.0003 | 2 1 2 3 | -0.0009 -0.0015 -0.0009 -0.0015 | fail |
+| 1c(A) multipliers by coordinate ascent on the macro-F1 averaged over 40 bootstrap resamples | +0.0001 -0.0001 -0.0000 -0.0006 | 3 2 2 2 | -0.0003 -0.0020 -0.0011 -0.0018 | fail |
+| 1c(B) multipliers and weight by L-BFGS on a soft macro-F1 (temperature 0.1) | +0.0005 +0.0006 +0.0007 +0.0003 | 4 3 4 2 | -0.0003 -0.0005 -0.0000 -0.0016 | fail (split seed 3) |
+
+* 1a(i): the log-loss puts almost all weight on the stacker (exponents 0.92-0.94 and 0.05-0.07): the naive Bayes is over-confident
+  (a product of 34 densities), so a likelihood fit shrinks it away, while the macro-F1 wants it at 0.5-0.6 of a LINEAR blend. A
+  geometric blend (1a(ii)) is no better than the linear one, and the weight it picks swings between 0.4 and 0.9.
+* 1b: the one-vs-rest form alone is worse than the pipeline's multi-class naive Bayes (0.7484 vs 0.7560 alone) and clipping lowers
+  it further alone (M = 2: 0.7421, 0.77% of the ratios clipped; M = 4: 0.7483, 0.13%); in the blend the nested M recovers the
+  loss and adds +0.0002 on average (row-bootstrap 95% CI [-0.0003, +0.0008]). No extreme-cell problem to fix.
+* 1c: the bootstrap-averaged search is not better than Powell. The soft macro-F1 search is the only candidate of rounds 33-34 with a
+  positive delta on all four splits: mean +0.00052, row-bootstrap 95% CI [+0.00005, +0.00105], and it picks the weight 0.6 in 15
+  of 20 folds (0.5-0.7 in all; the bootstrap search: 0.4-0.9). It fails the fold rule on split seed 3 (2/5 folds, worst -0.0016), and it is the best of
+  15 candidates on these splits, so `fv_r34_t2_soft_confirm.py` re-runs it unchanged on six fresh stacker splits (below).
+* Fold-level noise: one fold has 20,800 rows, and the paired fold deltas of candidates that change 1-1.5% of the labels have an
+  SD of about 0.001. A true gain of +0.0005 then clears "no fold below -0.0005" on all 20 folds with a probability of a few
+  percent; the fold floor decides Task 2 results more than the mean does. Reported so the user can weigh it; the rule is unchanged.
+
+**Task 2, 1c(B) on fresh splits** (`fv_r34_t2_soft_confirm.py`; the candidate unchanged, stacker split seeds 4-9, which no Task 2
+experiment had used; 13 minutes).
+
+| split seed | reference | soft search | delta | folds better | per fold |
+|---|---|---|---|---|---|
+| 4 | 0.7574 | 0.7576 | +0.0002 | 4/5 | +0.0002 +0.0006 +0.0001 -0.0003 +0.0005 |
+| 5 | 0.7574 | 0.7577 | +0.0003 | 4/5 | +0.0004 -0.0001 +0.0005 +0.0003 +0.0006 |
+| 6 | 0.7568 | 0.7574 | +0.0006 | 4/5 | +0.0006 +0.0006 +0.0020 -0.0010 +0.0008 |
+| 7 | 0.7567 | 0.7574 | +0.0007 | 2/5 | -0.0000 +0.0026 -0.0001 +0.0010 -0.0001 |
+| 8 | 0.7573 | 0.7577 | +0.0004 | 3/5 | +0.0018 +0.0011 -0.0005 -0.0009 +0.0007 |
+| 9 | 0.7563 | 0.7575 | +0.0012 | 5/5 | +0.0008 +0.0019 +0.0006 +0.0010 +0.0019 |
+
+* Mean +0.00058, positive on 6/6 fresh splits (10/10 with the first four); row-bootstrap 95% CI of the mean [+0.00006, +0.00109],
+  P(delta > 0) 0.988: the same size as on the selection splits (+0.00052), so no selection effect to speak of. Under the fold rule
+  it still fails (seed 7: 2/5 folds; seeds 6 and 8: folds at -0.0010 / -0.0009).
+* Why it helps: the soft search always picks the weight 0.6 (30 of 30 folds here) and nearly the same log-multipliers in every
+  fold (+0.17..+0.23, +0.19..+0.24, +0.25..+0.29), while Powell on the step function picks weights 0.3-0.7 and multipliers
+  from -0.05 to +0.18. The gain is variance removed from the decision rule, and the soft optimum sits at larger minority-class
+  multipliers than the noisy raw optimum.
+* **User decision (2026-11-16 ~21:50): for Task 2 a candidate passes when its mean on the fresh splits is positive and the
+  row-bootstrap 95% CI lower bound is above 0** (the fold floor is below the fold noise there). 1c(B) passes; it goes into the
+  pipeline for v26 (`src/metrics.optimize_class_weights_soft`).
+
+**Task 1, item 2b: bootstrap-smoothed cut-off** (`fs_r34_t1_boot_threshold.py`; 200 resamples of the training folds per fold).
+
+| candidate | pooled mean delta | folds better | worst fold | verdict |
+|---|---|---|---|---|
+| A mean of the 200 resample optima | -0.00003 | 0 2 3 2 | -0.00063 -0.00016 -0.00041 -0.00035 | fail |
+| B median of the resample optima | +0.00003 | 1 3 3 3 | -0.00027 -0.00009 -0.00005 -0.00005 | fail |
+| C argmax of the bootstrap-mean F2 curve | +0.00005 | 4 4 2 4 | -0.00005 -0.00002 -0.00100 -0.00013 | fail |
+
+* The cut-off from four folds is already stable: bootstrap SD 0.004-0.012, pipeline cuts 0.160-0.171 over all folds and splits,
+  and the smoothed cuts differ from it by 0.000-0.006. The validation fold's own optimum is anywhere in 0.135-0.189, i.e. the
+  noise is in the 18,000-row fold being scored, not in the cut-off estimate, so smoothing the estimate cannot help.
+
+**Task 1, item 2a: missingness-pattern and skill-stratified relative features** (`ft_r34_t1_relative.py`; 46 new features, every
+statistic fitted inside the training fold: missing counts per column group, group bitmask codes with their frequency and smoothed
+cheater rate, and for 16 mechanical / game-sense columns the residual against players in the same decile of `level` and of
+`kill_death_ratio`, plus mechanical / game-sense / gap means of those residuals).
+
+| candidate | delta on the four splits | folds better | worst fold | verdict |
+|---|---|---|---|---|
+| M0 control: three-seed LightGBM on the 49 pipeline features as a tenth member | +0.00009 -0.00003 -0.00001 +0.00033 | 3 3 2 5 | -0.00029 -0.00048 -0.00044 +0.00020 | fail |
+| M1 the same LightGBM + the 46 new features as a tenth member | +0.00005 +0.00023 -0.00012 -0.00008 | 3 4 2 2 | -0.00041 -0.00003 -0.00045 -0.00056 | fail |
+
+* Members alone (3 seeds, out of fold): AUC 0.89080 (M0) vs 0.89083 (M1), F2 at the best cut 0.83601 vs 0.83604; per-fold AUC
+  difference -0.0003 to +0.0007 with both signs; M1 correlates 0.997 with the pipeline's LightGBM member.
+* The missingness features carry nothing: the smoothed cheater rate of a group bitmask has AUC 0.50 on held-out rows (missingness
+  is completely at random, as in rounds 8-9). The trees do use the relative features (crosshair_placement against the K-D and
+  level strata: 6% and 4% of the gain), but only in place of splits they already had: the mean gap of the stratified residuals has
+  AUC 0.437-0.450 against 0.441 for the pipeline's `mech_minus_sense`.
+* A tenth member moves 0.2-0.4% of the labels and its mean effect (+0.00002 for M1, +0.00010 for the control) is inside that noise.
+
