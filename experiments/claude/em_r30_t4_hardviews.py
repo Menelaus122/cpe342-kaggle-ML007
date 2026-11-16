@@ -11,6 +11,8 @@ Variants per candidate: added at weight 1, 2 or 3 (fixed), weight chosen nested 
 5th), and, if the candidate is a DINOv2 re-run, in place of dinov2_v2 at its weight.
 Acceptance (user, 2026-11-16): hard-view mean (zoom70, HUD hidden, gamma 3.5, 75% grid) >= +0.0015 and full >= -0.0005; the generic
 rule (pooled > 0, >= 3/5 folds, no fold below -0.0005 on the hard-view mean) is reported too.
+Round 31: a candidate without a checkpoint for some folds (a fold-0 test) gets views for the folds it has; scoring is then left to
+fc_r31_t4_v23_eval.py, which scores against v23 on the folds available.
 """
 import sys
 from pathlib import Path
@@ -30,10 +32,12 @@ ARCH = {"cnxt": ("convnext_tiny.in12k_ft_in1k", (160, 320)), "deit3": ("deit3_sm
         "cnxtS_hud": ("convnext_small.in12k_ft_in1k", (160, 320)), "dinov2_v2": ("vit_base_patch14_reg4_dinov2.lvd142m", (126, 238)),
         "dinov2_r2": ("vit_base_patch14_reg4_dinov2.lvd142m", (252, 476)),
         "dinov2_sam": ("vit_base_patch14_reg4_dinov2.lvd142m", (126, 238)),
-        "cnxt_mix": ("convnext_tiny.in12k_ft_in1k", (160, 320))}
+        "cnxt_mix": ("convnext_tiny.in12k_ft_in1k", (160, 320)),
+        "dinov2L": ("vit_large_patch14_reg4_dinov2.lvd142m", (126, 238)),
+        "dinov2_photo": ("vit_base_patch14_reg4_dinov2.lvd142m", (126, 238))}
 V20 = ["cnxt", "deit3", "cnxt_hud", "cnxt22k_hud", "effv2_hud", "deit3_hud", "cnxtS_hud", "dinov2_v2"]
 MEMBER_W = {"dinov2_v2": 3.0}
-REPLACES = {"dinov2_r2": "dinov2_v2", "dinov2_sam": "dinov2_v2"}
+REPLACES = {"dinov2_r2": "dinov2_v2", "dinov2_sam": "dinov2_v2", "dinov2_photo": "dinov2_v2", "dinov2L": "dinov2_v2"}
 CANDS = sys.argv[1:]
 V19, V30 = Path("experiments/claude/outputs/r19_views"), Path("experiments/claude/outputs/r30_views")
 V30.mkdir(parents=True, exist_ok=True)
@@ -74,7 +78,7 @@ for tag in V20 + CANDS:
     name, size = ARCH[tag]
     for f, va in enumerate(folds):
         out = V30 / f"{tag}_fold{f}.npz"
-        if out.exists():
+        if out.exists() or (tag in CANDS and not (MODEL_DIR / f"t4_{tag}_fold{f}.pt").exists()):
             continue
         m = task4.create_model(name, pretrained=False, img_size=size).cuda().to(memory_format=torch.channels_last)
         m.load_state_dict(torch.load(MODEL_DIR / f"t4_{tag}_fold{f}.pt", map_location="cuda"))
@@ -95,6 +99,9 @@ for tag in V20 + CANDS:
         del m, arr
         torch.cuda.empty_cache()
 
+partial = [t for t in CANDS if any(not (V30 / f"{t}_fold{f}.npz").exists() for f in range(5))]
+if partial:
+    sys.exit(f"views written; {partial} lack some folds, so score them with fc_r31_t4_v23_eval.py (v23 base, partial folds)")
 P = {t: {v: np.zeros((len(y), 5)) for v in ALL5} for t in V20 + CANDS}
 for t in P:
     for f, va in enumerate(folds):
