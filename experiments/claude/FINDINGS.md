@@ -2335,3 +2335,226 @@ cheater rate, and for 16 mechanical / game-sense columns the residual against pl
 z-space KDE fail. Task 1: bootstrap-smoothed cut-offs and missingness / skill-stratified features fail. Task 4 items (photometric
 TTA, DINOv2-L fold 0) run in the GPU queue after the dinov2_r2 training. **User decision (2026-11-16 ~22:00): the tabular
 experiments (Tasks 1-3, 5) are closed after these runs; the remaining effort goes to Task 4.**
+
+## Round 35 (2026-11-16 late night): final out-of-the-box check for the tabular tasks (user brief of ~22:25)
+Three last hypotheses on the CPU beside the Task 4 GPU queue (Task 1 focal-loss member, Task 2 pair tie-breaker, Task 3 tail
+shrinkage); if they fail the tabular side is closed for good. The pending
+Task 2 change (soft macro-F1 search) is committed (`2d52b2e`); `submission_v26.csv` = v25 with that Task 2 (172 labels differ, the
+other four columns identical) is assembled but not uploaded.
+
+### v26 (user decision, 2026-11-16 22:32: upload the Task 2 change on its own)
+Stated before the upload: the expected gain is about +0.0001 on the leaderboard mean, the public split's noise for 172 changed
+labels about +-0.0003, so the public score cannot confirm or refute the change, and v26 is kept either way on the nested
+evidence. Uploaded 22:33 via the Kaggle CLI: **public 0.86147 (-0.00001 against v25)**. Snapshot `versions/v26_LB0.86147/`;
+`submission.csv` = v26. The best public score stays v25 (0.86148), so the final submissions have to be selected by hand.
+
+**Task 3, nested shrinkage of the top 1% of the predictions** (`fw_r35_t3_tail_shrink.py`; y_new = tau + g (y_hat - tau) above
+tau = the 99th percentile of the predictions, g on a 0.01 grid chosen on the other four folds; reference = the nested read-out,
+NMAE 0.79457).
+
+| variant | delta | folds better | g picked per fold | verdict |
+|---|---|---|---|---|
+| top 1%, g in [0.85, 1.00] (the brief) | +0.00000 | 0/5 | 1.00 1.00 1.00 1.00 1.00 | fail |
+| top 2%, g in [0.85, 1.00] | +0.00000 | 0/5 | 1.00 in every fold | fail |
+| top 0.5%, g in [0.85, 1.00] | -0.00001 | 0/5 | 1.00 1.00 1.00 0.99 1.00 | fail |
+| top 1%, g free in [0.70, 1.15] | -0.00004 | 0/5 | 1.05 1.00 1.03 1.00 1.04 | fail |
+| top 5%, g free in [0.70, 1.15] | -0.00006 | 1/5 | 1.02 1.00 1.01 1.00 1.02 | fail |
+
+* The top 1% of the predictions (1,040 rows; 10.9% of the total absolute error) is not over-predicted: mean prediction 168,855
+  against a mean target of 164,726, median target / prediction 1.008, only 5.5% of the rows below half their prediction and none
+  above twice. In-sample, any shrinkage loses (g 0.95: -0.00010, 0.90: -0.00026, 0.85: -0.00051); the training folds pick g = 1.00,
+  and with a free range slightly above 1. The L1 read-out is already the conditional median up there; the low-spending whales are
+  too few to move it.
+
+**Task 1, level-1 LightGBM with an asymmetric focal loss** (`fy_r35_t1_focal.py`; gamma 2, alpha 0.75 on the cheater class, custom
+objective with analytic gradient / Hessian (checked numerically; Hessian floored, the focal loss is not convex in the score); the
+49 pipeline features + the 15 pairwise ratios of the top-6 skill columns chosen inside each fold (crosshair_placement,
+game_sense_score, headshot_percentage, kill_death_ratio, accuracy_score and aiming_smoothness / spray_control_score); 3 seeds;
+CatBoost left out: its Python custom objectives take hours on the CPU).
+
+| member as a tenth level-2 input | delta on the four splits | folds better | worst fold | verdict |
+|---|---|---|---|---|
+| C control: log-loss LightGBM, same features | -0.00048 +0.00022 +0.00011 -0.00016 | 2 4 2 2 | -0.00209 -0.00026 -0.00029 -0.00039 | fail |
+| F focal-loss LightGBM | -0.00051 -0.00016 -0.00003 +0.00013 | 0 2 2 4 | -0.00083 -0.00038 -0.00037 -0.00040 | fail |
+
+* Alone the focal member is marginally better (AUC 0.89133 vs 0.89111, F2 at its best cut 0.83693 vs 0.83601), but its ranking is
+  the log-loss member's (Spearman 0.996; 0.994 with the pipeline's LightGBM member). Re-weighting towards hard rows changes the
+  scale of the scores more than their order, and the level 2 already sets the scale; as a tenth member it only adds noise.
+
+**Task 2, pair-focused naive-Bayes tie-breaker on top of the v26 rule** (`fx_r35_t2_pair_tiebreak.py`; rows whose two best classes
+under the v26 rule are within 0.06 (4.5% of the rows) are re-decided by the likelihood ratio of the pair on the n columns that
+separate it best on the training folds; the pipeline's per-feature naive-Bayes densities, out of fold).
+
+| variant | brief's four splits: mean delta, folds better, worst fold | fresh splits 4-9: mean delta, folds better | row-bootstrap 95% CI (fresh) | verdict |
+|---|---|---|---|---|
+| n = 8 columns | -0.00039; 2 0 3 2; -0.0018 | -0.00036; 2 2 2 2 2 2 | [-0.00116, +0.00042] | fail |
+| n = 10 columns | -0.00012; 2 2 3 2; -0.0016 | -0.00024; 2 1 3 3 0 3 | [-0.00097, +0.00049] | fail |
+| all 34 columns (control) | -0.00008; 2 1 2 2; -0.0018 | -0.00012; 2 1 3 3 1 3 | [-0.00076, +0.00039] | fail |
+| n = 10, pairs gated on the training folds | -0.00039; 1 1 1 0; -0.0023 | -0.00024; 1 0 2 0 2 1 | [-0.00050, -0.00002] | fail |
+
+* On the tie rows every rule is right less than half the time: v26 0.439-0.452, the 10-column ratio 0.433-0.441, the whole naive
+  Bayes 0.441-0.450 (ten splits). Dropping the columns that do not separate the pair throws away information instead of noise (the features are
+  independent given the segment, so every column's evidence counts); the tie rows are decided by label noise.
+
+**Task 5, the period-profile ("12-D") classifier ratio against the 3-D density ratio: final summary** (`fk_r32_t5_pocket_12d.py`,
+round 32 item 4).
+
+| pocket score | cut-off k | est. precision | expected F3 (common group size 234) | first release (reference only): F3, pocket precision |
+|---|---|---|---|---|
+| 3-D density ratio (v24; 200 halvings) | 265 | 0.846 | 0.9937 | 0.9895, 0.836 |
+| 12-D classifier ratio (v25; 40 halvings, seeds 42 / 1 / 2) | 244 / 242 / 247 | 0.956 / 0.963 / 0.946 | 0.9993 / 0.9992 / 0.9993 | 0.9905-0.9911, 0.945-0.968 (20 halvings) |
+
+* The 12-D ratio wins on the label-free estimate in every seed, the first-release reference agrees, and the leaderboard moved
+  +0.00013 (v24 0.86135 -> v25 0.86148). **Task 5 is locked at the v25 version** (1,809 family accounts + 244 pocket accounts =
+  2,053 flags; `task5.pocket_refine(..., df=...)`, 40 halvings, 200 block-shuffle draws, seed 42).
+
+## Round 36 (2026-11-16 night): untried structural and metric-aligned methods for every task (user brief of ~22:40)
+Methods already tried and failed in rounds 1-35 are skipped (the brief's list; also the Casual <-> Grinder pair specialist of round
+30). CPU jobs at idle priority with 2-4 threads beside the GPU training (fold-4 epochs stayed at 852-873 s with three to four CPU
+jobs running). Acceptance as before; for Task 2 also the user's bootstrap rule of 16 Nov 2026.
+
+**Task 4, item 1 (logit-space meta-learner) and item 3 (class multipliers)** (`ga_r36_t4_stacker.py`; the eight v23 members'
+out-of-fold views, nested over the five folds, the v17 rule after every candidate; base = v23 weights. dinov2_r2 joins once its
+views exist for all folds.)
+
+| candidate | hard-view mean | folds better | full | zoom70 | HUD hidden | gamma 3.5 | 75% grid | dark / low-contrast | hard-view rule | v24 check |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1a ridge logit stacker (multinomial LR on 40 log-probabilities), C 0.1, fitted on the full view | -0.0156 | 0/5 | +0.0004 | -0.0014 | -0.0026 | -0.0072 | -0.0511 | +0.0015 | fail | fail |
+| 1a the same, C 1 | -0.0267 | 0/5 | +0.0001 | -0.0029 | -0.0068 | -0.0073 | -0.0899 | +0.0024 | fail | fail |
+| 1b ridge logit stacker, C 0.1, fitted on the five views pooled | +0.0047 | 5/5 | -0.0008 | -0.0002 | -0.0001 | +0.0070 | +0.0119 | -0.0019 | fail (full) | fail |
+| 1b the same, C 1 | +0.0045 | 5/5 | -0.0009 | -0.0002 | -0.0002 | +0.0070 | +0.0114 | -0.0024 | fail (full) | fail |
+| 1c one non-negative weight per member on the log-probabilities, five views pooled | -0.0028 | 0/5 | -0.0012 | +0.0001 | -0.0019 | -0.0008 | -0.0087 | -0.0030 | fail | fail |
+| 3 class multipliers (soft macro-F1, balanced rows) on the v23 rule, fitted on the full view | +0.0004 | 4/5 | -0.0002 | -0.0002 | -0.0008 | +0.0006 | +0.0022 | -0.0010 | fail | fail |
+| 3 the same, fitted on the five views pooled | +0.0029 | 5/5 | -0.0002 | -0.0005 | -0.0015 | +0.0044 | +0.0092 | -0.0002 | **PASS** | fail |
+
+* A free meta-learner fitted on full frames over-trusts the members that are best on full frames and collapses on hidden or
+  darkened ones (grid -0.05 to -0.09). Fitted on all five views it learns the degraded views, but every gain sits in gamma 3.5
+  and the 75% grid, the two synthetic views; full, zoom70, HUD hidden and the real dark frames all lose a little.
+* The weighted geometric mean (1c) gives DINOv2 0.52 and three HUD-dropout members the rest, zeroing five members: on these views
+  a likelihood fit prefers fewer members than the hard-view-tuned linear weights of v23.
+* The multipliers fitted on the pooled views are +0.38..+0.61 in log for every class against 7-Eleven Knights, the same in every
+  fold: they lower the largest class's prior further (an effective alpha above 0.75), which helps on the views where the members
+  drift towards that class (gamma, grid) and costs on the others. It passes the hard-view rule but not the v24 check the user set
+  for Task 4 on the morning of 16 Nov (gain beyond the grid: zoom70, HUD hidden and dark frames must all be > 0). Not adopted.
+* Item 2 (entropy-gated TTA): `fu_r34_t4_photo_tta.py` now also scores two geometric views (HUD greyed out, central 85% crop) and
+  gated versions that use the transform set only for images whose ensemble entropy on the incoming view is above the 80th / 90th /
+  95th percentile of the training full-view entropies. It runs in the GPU queue after the dinov2_r2 evaluation; the CPU scoring
+  phase was dry-run on synthetic transform files.
+
+**Task 3, quantile members in the pool and a band-restricted gate calibration** (`gd_r36_t3_quantile_gate.py`; reference = the
+pipeline rebuilt fully nested, NMAE 0.79457. The brief's budget was 10 CPU minutes; the run took 49, most of it the nested exact
+L1 blends, 7 x 5 HiGHS solves.)
+
+| candidate | nested NMAE | delta | folds better | per fold | verdict |
+|---|---|---|---|---|---|
+| + LightGBM pinball member q = 0.40 (raw THB) in the L1 pool | 0.79457 | +0.00000 | 0/5 | all 0 | fail |
+| + LightGBM pinball member q = 0.45 | 0.79457 | +0.00000 | 0/5 | all 0 | fail |
+| + both | 0.79457 | +0.00000 | 0/5 | all 0 | fail |
+| logistic recalibration of P(y > 0) inside p in [0.45, 0.65], one fit | 0.79458 | +0.00001 | 4/5 | +0.00001 +0.00001 -0.00000 +0.00001 +0.00002 | passes the letter of the rule |
+| the same per imputed segment | 0.79458 | +0.00000 | 4/5 | -0.00004 +0.00002 +0.00002 +0.00001 +0.00002 | passes the letter of the rule |
+
+* The quantile members alone: NMAE 0.78026 (q 0.40) and 0.78429 (q 0.45), coverage 0.558 / 0.577; the exact L1 blend gives them
+  weight 0 in every fold (on all rows: ratio[hist] Cat mixture median 0.673, ratio[hist] XGB 0.195, ratio[prev] LGB tuned 0.133). A
+  single quantile level is the right read-out only for rows whose p puts the mixture median at that level; the mixture-median
+  read-outs of the ratio models already give every row its own level.
+* The band holds 16.9% of the rows; its positive rate 0.571 against a mean p of 0.568: P(y > 0) is already calibrated where the
+  gate decides. The recalibration moves 0.25-0.29% of the rows across 0.5 and gains +0.00001 NMAE (about +0.000002 on the public
+  score). Like round 30's per-segment isotonic (+0.00002, 4/5 folds), it passes the letter of the rule at a noise-level size; the
+  user discarded that one for this reason, so this is reported, not merged.
+
+**Interrupted at about 23:45: Claude Code stopped every background job because the system ran critically low on memory** (the
+dinov2_r2 fold-4 training at the end of epoch 11 of 15, the GPU queue waiting behind it, and the CPU jobs below). Nothing was
+restarted (user rule). dinov2_r2 folds 0-3 are saved (models and out-of-fold predictions); fold 4 has no checkpoint (the trainer
+does not resume) and must be trained again from the start, about 3.6 hours. Partial results:
+
+**Task 2, per-class isotonic calibration and pair specialists on the v26 rule** (`ge_r36_t2_iso_specialist.py`; 8 of the 10 splits
+finished: the pipeline folds, seeds 1-3 and fresh seeds 4-7).
+
+| candidate | delta per split (pipeline, 1, 2, 3 \| 4, 5, 6, 7) | folds better | verdict |
+|---|---|---|---|
+| 1a isotonic per class (4 one-vs-all maps per model), linear blend | +0.0001 -0.0003 -0.0003 +0.0000 \| +0.0002 -0.0002 +0.0003 -0.0001 | 2 1 1 2 \| 4 1 3 3 | fail (mean about 0) |
+| 1b the same, log-linear blend | +0.0000 -0.0003 -0.0001 +0.0001 \| -0.0000 -0.0001 +0.0003 +0.0001 | 2 0 2 3 \| 2 1 3 3 | fail (mean about 0) |
+| 2 specialist Casual <-> Social | 0 on every split | lam = 0 picked in every fold | fail |
+| 2 specialist Social <-> Whale | 0 on every split | lam = 0 picked in every fold | fail |
+
+* Base-rule confusion (pipeline folds, symmetric): Casual <-> Grinder 8,344, Casual <-> Social 5,803, Social <-> Whale 4,051,
+  Grinder <-> Whale 2,997, Grinder <-> Social 1,906, Casual <-> Whale 789. Casual <-> Grinder was skipped (round 30).
+* The specialists are less accurate on their own pair's rows than the four-class blend's pairwise log-odds (Casual <-> Social
+  0.8851 vs 0.8882, Social <-> Whale 0.8499 vs 0.8538; correlation 0.98), so the training folds never use them: as in round 30, a
+  two-class model on the same features learns the same boundary from less data.
+* Isotonic maps change the probabilities but not the decisions the soft search reaches (weight 0.6 in most folds); the mean effect
+  over eight splits is about 0. The two missing splits cannot turn either into a pass.
+
+**Task 5, rank fusion of the classifier ratio with a k-NN distance ratio** (`gb_r36_t5_knn_fusion.py`; competition data, seeds 42
+and 1, 20 halvings, 100 shared null draws; the first-release reference run was cut off).
+
+| score | seed 42: k, est. precision, expected F3 | seed 1: k, est. precision, expected F3 | seed Jaccard |
+|---|---|---|---|
+| classifier 12-D alone (v25) | 242, 0.962, **0.9990** | 249, 0.935, **0.9992** | **0.972** |
+| k-NN distance ratio alone (k 15 + 50) | 262, 0.737, 0.9786 | 253, 0.769, 0.9802 | 0.705 |
+| classifier + k-NN, 1/2 : 1/2 | 329, 0.662, 0.9874 | 284, 0.737, 0.9860 | 0.670 |
+| classifier + k-NN, 2/3 : 1/3 | 284, 0.759, 0.9885 | 309, 0.691, 0.9868 | 0.734 |
+
+* The k-NN ratio agrees with the classifier only at the top (Spearman 0.73-0.76 among the classifier's top 300, 0.14-0.21 over
+  all accounts): in 12 dimensions with 24,080 points the distance to the 15th / 50th neighbour is a noisy density estimate, and
+  averaging ranks with it lowers the precision and the seed stability. Fails the label-free decision rule fixed before the run;
+  **Task 5 stays locked at v25** (user, 2026-11-16).
+
+**Task 1, ranking objectives and leaf embeddings** (`gc_r36_t1_rank_leaf.py`): only the members of pipeline fold 0 were finished
+(34 minutes per fold at 3 threads): AUC lambdarank (skill-tier x bucket queries) 0.88891, rank:pairwise (skill-tier queries)
+0.88833, against 0.89197 for the pipeline's LightGBM member on the same fold. No level-2 result; the leaf-embedding member did not
+start.
+
+**Plan A (user, 2026-11-16 ~23:50): dinov2_r2 on its four finished folds, then the DINOv2 TTA test** (one GPU job at a time, no CPU
+job beside it; `scratchpad/queue_r36A.py`, logs `outputs/logs/r36A_*.log`). Views of folds 0-3 took 30 minutes; scores against
+v23 on the same four folds (`fc_r31_t4_v23_eval.py`, rules fixed before the run).
+
+| dinov2_r2 variant (folds 0-3) | hard-view mean | folds | without the grid | full | zoom70 | HUD hidden | gamma 3.5 | 75% grid | dark / low-contrast | hard-view rule | v24 check |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| alone (dinov2_v2 alone) | | | | 0.9861 (0.9862) | 0.9716 (0.9727) | 0.9565 (0.9534) | 0.9392 (0.9418) | 0.9071 (0.8586) | 0.9699 (0.9699) | | |
+| added at weight 2 | +0.0035 | 4/4 | +0.0007 | -0.0002 | -0.0000 | +0.0007 | +0.0014 | +0.0121 | -0.0005 | PASS | fail |
+| added at weight 4 | +0.0059 | 4/4 | +0.0011 | -0.0001 | -0.0000 | +0.0009 | +0.0024 | +0.0204 | -0.0008 | PASS | fail |
+| added at weight 8 | +0.0085 | 4/4 | +0.0016 | +0.0001 | -0.0004 | +0.0017 | +0.0035 | +0.0294 | -0.0009 | PASS | fail |
+| in place of dinov2_v2 (weight 8) | +0.0076 | 4/4 | -0.0009 | -0.0002 | -0.0012 | +0.0014 | -0.0027 | +0.0331 | -0.0014 | PASS | fail |
+| weights (dinov2_v2, dinov2_r2) nested: (4, 8) in every fold | +0.0087 | 4/4 | +0.0007 | -0.0000 | -0.0005 | +0.0016 | +0.0010 | +0.0328 | -0.0014 | PASS | fail |
+
+* The higher resolution helps almost only where the frame is cut into a fine grid (alone, 75% grid 0.9071 vs 0.8586); on full
+  frames, zoom70 and the real dark / low-contrast frames it is equal or slightly worse than dinov2_v2, and every combination loses
+  on zoom70 and on the dark frames (by fold -0.0040 to +0.0019). The hard-view rule passes on the strength of the grid view, which
+  is exactly what the user's v24 check (morning of 16 Nov) was set to catch: zoom70, HUD hidden and the dark frames must all gain.
+  It fails that check in every variant on four folds; a fifth fold cannot plausibly turn zoom70 and the dark frames positive.
+  Recommendation: do not spend 3.6 GPU hours on fold 4; dinov2_r2 is not adopted.
+
+**Task 4, item 2: photometric, geometric and entropy-gated TTA of the DINOv2 member** (`fu_r34_t4_photo_tta.py dinov2_v2`; every
+fold model on its own validation images, 5 views x 6 transforms x h-flip, 54 GPU minutes; the transformed member replaces the
+plain one at weight 8 in v23; rule fixed before the run: dark / low-contrast frames > 0 in >= 3/5 folds, full >= -0.0005, mean of
+zoom70 / HUD hidden / grid >= -0.0005; the gamma 3.5 view is not counted).
+
+| transform set | full | zoom70 | HUD hidden | gamma 3.5 | 75% grid | dark / low-contrast | dark by fold | verdict |
+|---|---|---|---|---|---|---|---|---|
+| id + autocontrast | -0.0001 | +0.0003 | -0.0010 | +0.0032 | -0.0001 | -0.0002 | 0 -19 +14 -14 +8 (x1e-4) | fail |
+| id + autogamma | +0.0001 | -0.0002 | -0.0001 | +0.0091 | -0.0013 | +0.0004 | -14 +13 +14 -18 +26 | fail |
+| id + gamma 0.5 | -0.0002 | -0.0006 | -0.0004 | +0.0086 | -0.0022 | +0.0000 | -22 +12 +14 -18 +13 | fail |
+| all four photometric | -0.0002 | -0.0003 | -0.0004 | +0.0109 | -0.0008 | +0.0005 | -14 +13 +14 -18 +27 | fail |
+| id + HUD greyed out | -0.0010 | -0.0017 | +0.0000 | -0.0058 | -0.0119 | -0.0015 | all negative | fail |
+| id + central 85% crop | -0.0003 | -0.0013 | +0.0006 | -0.0013 | -0.0011 | +0.0014 | +6 +28 +14 -14 +33 | fail (zoom / HUD / grid mean -0.0006) |
+| all six | -0.0006 | -0.0007 | -0.0001 | +0.0044 | -0.0037 | -0.0001 | -8 -8 +14 -18 +15 | fail |
+| entropy-gated photometric (above p80, p90 or p95) | -0.0000 | -0.0001 | -0.0008 | +0.0078 | -0.0007 | +0.0003 | -14 +7 +14 -18 +27 | fail |
+| entropy-gated all six (p80 / p90 / p95) | -0.0006 | -0.0007 | -0.0001 | +0.0044 | -0.0037 | -0.0001 | -8 -8 +14 -18 +15 | fail |
+| set chosen nested (id + crop85 in every fold) | -0.0003 | -0.0013 | +0.0006 | -0.0013 | -0.0011 | +0.0014 | +6 +28 +14 -14 +33 | fail |
+
+* Alone, every transform makes the member WORSE on the real dark / low-contrast frames (argmax accuracy 0.9738 plain; autocontrast
+  0.9697, autogamma 0.9687, gamma 0.5 0.9695, crop 0.9666, HUD greyed 0.9255). The fine-tuned DINOv2 has learned the frames as they
+  come; re-lighting moves them away from the training distribution. The large gains are on the synthetic gamma 3.5 view only, which
+  autogamma inverts by construction (the reason that view is not counted).
+* Entropy gating changes nothing: the gated sets equal the ungated ones to four decimals at all three percentiles. With DINOv2 at
+  8/32 of the ensemble, only images that are already uncertain (above the 95th entropy percentile) can change label, so a gate at
+  the 80th-95th percentile lets through every image whose decision could move anyway.
+* The central crop is the only set that helps the real dark frames (+0.0014, 4/5 folds) and the training folds pick it every time,
+  but it costs zoom70 (-0.0013) and the grid (-0.0011). Fails; no TTA change for Task 4.
+
+**Round 36 summary.** No candidate passes: Task 1 focal / ranking members (ranking incomplete), Task 2 isotonic calibration and pair
+specialists, Task 3 quantile members (the band recalibration passes the letter of the rule at +0.00001 and is not merged, as round
+30's), Task 4 meta-learners, class multipliers, photometric / entropy-gated TTA and dinov2_r2 (hard-view rule only through the grid
+view; fails the v24 check on four folds), Task 5 k-NN fusion. v26 stays the pipeline state.
+

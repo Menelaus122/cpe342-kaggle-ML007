@@ -11,6 +11,8 @@ the network (h-flip averaged as in the pipeline):
   autocontrast  per image, the luminance range between its 1st and 99th percentile stretched to [0, 1] (skipped if the range < 0.05)
   autogamma     per image, x ** g with g = log(0.45) / log(mean luminance), clipped to [0.25, 1] (brightens dark frames only)
   gamma05       x ** 0.5 for every image
+  hudmask       the HUD border greyed out (centre_grey), round 36
+  crop85        the central 85% of the frame, resized (round 36)
 Probabilities go to experiments/claude/outputs/r34_views/<tag>_fold<f>.npz (keys "<view>|<transform>").
 CPU phase: v23 ensemble (member weights DINOv2 x8, HUD-dropout members x3, others x1; v17 rule; uniform class mix; members only)
 with the DINOv2 member's probabilities replaced by the mean over a transform set. For dinov2_r2 the base is v23 with dinov2_r2 in
@@ -19,6 +21,9 @@ Rule, fixed before the run: the gamma-3.5 view is NOT counted (autogamma / gamma
 passes if, pooled over the folds: the real dark / low-contrast frames (lowest decile of contrast or brightness, full view) gain
 > 0 and in >= 3/5 folds; full >= -0.0005; and the mean of zoom70, HUD hidden and the 75% grid >= -0.0005.
 The set is also chosen nested (on four folds by the dark / low-contrast gain among the sets that keep full >= -0.0005 there).
+Round 36, entropy-gated TTA: the transform set is used only for images whose ensemble prediction on the incoming view is uncertain
+(entropy of the v23 members' mean probability above the 80th / 90th / 95th percentile of the full-view entropies of the training
+images); every other image keeps the plain prediction. Same rule; the (set, percentile) pair is also chosen nested.
 """
 import sys
 from pathlib import Path
@@ -36,10 +41,14 @@ V23_W = {t: (8.0 if t == "dinov2_v2" else 3.0 if t in HUDM else 1.0) for t in V2
 SIZE = {"dinov2_v2": (126, 238), "dinov2_r2": (252, 476)}
 NAME = "vit_base_patch14_reg4_dinov2.lvd142m"
 ALL5 = ["full", "zoom70", "centre_grey", "dark_g35", "grid75"]
-TTAS = ["id", "autocontrast", "autogamma", "gamma05"]
+TTAS = ["id", "autocontrast", "autogamma", "gamma05", "hudmask", "crop85"]
 SETS = {"id + autocontrast": ["id", "autocontrast"], "id + autogamma": ["id", "autogamma"], "id + gamma05": ["id", "gamma05"],
-        "id + autocontrast + autogamma": ["id", "autocontrast", "autogamma"], "all four": TTAS, "autogamma only": ["autogamma"]}
+        "id + autocontrast + autogamma": ["id", "autocontrast", "autogamma"], "all four photometric": TTAS[:4], "autogamma only": ["autogamma"],
+        "id + hudmask": ["id", "hudmask"], "id + crop85": ["id", "crop85"], "all six": TTAS}
+GATED = {"photometric": ["id", "autocontrast", "autogamma"], "all six": TTAS}          # round 36: sets used only on uncertain images
+GATE_Q = (0.80, 0.90, 0.95)
 V19, V30, V34 = (Path(f"experiments/claude/outputs/{d}") for d in ("r19_views", "r30_views", "r34_views"))
+V34 = Path(__import__("os").environ.get("R34_VIEWS", V34))            # override for a dry run of the CPU phase
 V34.mkdir(parents=True, exist_ok=True)
 TAGS = sys.argv[1:] or ["dinov2_v2"]
 train, _ = task4.load_frames()
@@ -86,7 +95,8 @@ if todo:
 
     VIEW = {"full": lambda x: x, "zoom70": lambda x: zoom(x, 0.7), "centre_grey": centre_grey,
             "dark_g35": lambda x: x.clamp_min(1e-6) ** 3.5, "grid75": grid75}
-    TF = {"id": lambda x: x, "autocontrast": autocontrast, "autogamma": autogamma, "gamma05": lambda x: x.clamp_min(1e-6) ** 0.5}
+    TF = {"id": lambda x: x, "autocontrast": autocontrast, "autogamma": autogamma, "gamma05": lambda x: x.clamp_min(1e-6) ** 0.5,
+          "hudmask": centre_grey, "crop85": lambda x: zoom(x, 0.85)}
     for tag, f in todo:
         size, va = SIZE[tag], folds[f]
         m = task4.create_model(NAME, pretrained=False, img_size=size).cuda().to(memory_format=torch.channels_last)
@@ -167,16 +177,34 @@ for tag in TAGS:
         pdk = [delta(lab, base, "dark/low-contrast", fo == f) for f in range(5)]
         geo = np.mean([d[v] for v in ("zoom70", "centre_grey", "grid75")])
         ok = d["dark/low-contrast"] > 0 and sum(p > 0 for p in pdk) >= 3 and d["full"] >= -0.0005 and geo >= -0.0005
-        print(f"  {name:32s} " + ", ".join(f"{k} {d[k]:+.4f}" for k in SCORE) + f" | dark by fold {' '.join(f'{p:+.4f}' for p in pdk)} "
+        print(f"  {name:40s} " + ", ".join(f"{k} {d[k]:+.4f}" for k in SCORE) + f" | dark by fold {' '.join(f'{p:+.4f}' for p in pdk)} "
               f"| zoom / HUD / grid mean {geo:+.4f} -> {'PASS' if ok else 'fail'}", flush=True)
 
+    ens = {v: (sum(w * P[t][v] for t, w in others.items()) + 8.0 * Q[f"{v}|id"]) / (sum(others.values()) + 8.0) for v in ALL5}
+    ent = {v: -(np.clip(ens[v], 1e-9, 1) * np.log(np.clip(ens[v], 1e-9, 1))).sum(1) for v in ALL5}
+
+    def labels_gated(ttas, q):
+        thr = np.quantile(ent["full"], q)
+        out = {}
+        for v in ALL5:
+            m = np.where((ent[v] > thr)[:, None], np.mean([Q[f"{v}|{t}"] for t in ttas], 0), Q[f"{v}|id"])
+            p = (sum(w * P[t][v] for t, w in others.items()) + 8.0 * m) / (sum(others.values()) + 8.0)
+            out[v] = (p * pi ** -0.75).argmax(1)
+        return out
+
+    print(f"  ensemble entropy: full-view percentiles 80 / 90 / 95 = " + " / ".join(f"{np.quantile(ent['full'], q):.3f}" for q in GATE_Q)
+          + "; share of images above the 90th-percentile threshold per view: " + ", ".join(f"{v} {np.mean(ent[v] > np.quantile(ent['full'], .9)):.3f}" for v in ALL5)
+          + f"; dark / low-contrast frames {np.mean(ent['full'][dark] > np.quantile(ent['full'], .9)):.3f}")
+    for gn, gs in GATED.items():
+        for q in GATE_Q:
+            labs[f"gated {gn}, entropy > p{int(q * 100)}"] = labels_gated(gs, q)
     for n, lab in labs.items():
         report(n, lab)
     nested = {v: base[v].copy() for v in ALL5}
     picks = []
     for f in range(5):
         m = fo != f
-        ok = [n for n in SETS if delta(labs[n], base, "full", m) >= -0.0005]
+        ok = [n for n in labs if delta(labs[n], base, "full", m) >= -0.0005]
         best = max(ok, key=lambda n: delta(labs[n], base, "dark/low-contrast", m)) if ok else None
         if best is not None and delta(labs[best], base, "dark/low-contrast", m) <= 0:
             best = None
