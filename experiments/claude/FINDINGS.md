@@ -2057,10 +2057,90 @@ the family differs from the unflagged accounts U beyond the Bonferroni bound (on
   accounts above that 99th percentile (precision 0.025, far below the F*/10 = 0.1 bar); even U's top 0.1% (about 24 accounts, 3
   true) would sit near the bar, and an excess of 3 in 24 is invisible against Poisson noise (+-5) on the competition data.
 
+**Item 4, classifier density ratio on the whole period profile** (`fk_r32_t5_pocket_12d.py`; user approval of 2026-11-16 ~16:00:
+run on the CPU at idle priority, move into the pipeline before v25 only if the expected F3 rises clearly and the first-release
+reference F3 is above 0.9895).
+* Design. Rows = the accounts outside the gap families (24,080). Per pocket behaviour (accuracy_std, kda_std,
+  performance_stability) a block of 8 features from its four periods: normal score of each period (missing stays missing), of the
+  period mean, min / max / SD of the period scores. Null = block shuffle (each behaviour's block permuted over the accounts
+  independently): keeps every within-behaviour dependence, removes only the dependence across behaviours, the same hypothesis as
+  the 3-D null. Ratio = log-odds of a HistGradientBoosting classifier (real rows of a half against 3 block shuffles of the same
+  half), cross-fitted over 20 halvings; cut-off from 200 block-shuffle draws scored the same way.
+* Checks of the null on the accounts outside the families: about 18% miss at least one period of a behaviour (4.8% of the cells);
+  missingness is independent across behaviours; level correlations across behaviours 0.003-0.029, same-period deviation
+  correlations about 0. So the block shuffle only removes the pocket.
+* A trap: with block features only, greedy trees cannot split. Every block value sits in exactly 1 real and 3 shuffled training
+  rows, so every single-feature split has zero gain; the scores were constant and the "group of 3,000" of the first run was a tie
+  artefact (early stopping only seemed to work because its validation part breaks the 1 : 3 balance by chance). Fix: six
+  across-behaviour columns per row (min / mean / max of the three level scores, min and mean of the per-behaviour lowest period
+  score, number of periods in the top 20%), recomputed for every shuffled row.
+* Classifier setting picked on the label-free expected F3 of a 6-halving run (group 260): early stopping 0.9828; 100 iterations at
+  lr 0.05 0.9864; 150 iterations with 4 leaves 0.9864; **300 iterations at lr 0.03, 8 leaves, 200 rows per leaf 0.9876** (kept).
+* Result, 20 halvings / 200 null draws, three master seeds (common group size = the largest estimate of the run):
+
+| score | competition data: group, k, est. precision, expected F3 | first release (reference): k, est. precision, reference F3, pocket precision |
+|---|---|---|
+| min-rank (2-D) | 201, 339, 0.574, 0.9755 | 380, 0.535, 0.9827, 0.618 |
+| density ratio 3-D (v24 pipeline, 200 / 1000) | 224, 265, 0.846, 0.9935 | 287, 0.786, 0.9895, 0.836 |
+| **classifier 12-D, seed 42** | 234, **242**, 0.962, **0.9989** | 254, 0.920, **0.9911**, 0.945 |
+| classifier 12-D, seed 1 | 233, 249, 0.936, 0.9987 | 247, 0.950, 0.9909, 0.968 |
+| classifier 12-D, seed 2 | 233, 249, 0.936, 0.9987 | 246, 0.960, 0.9905, 0.968 |
+
+* Against the 3-D flags on the competition data: 235-240 in both, 7-9 only in the 12-D pocket, 25-30 only in the 3-D pocket
+  (Jaccard 0.86-0.88). First release (reference): of the 39-43 accounts only the 3-D pocket flags, 1-2 are true anomalies; of the
+  2-6 only the 12-D pocket flags, 0-1. The classifier removes the 3-D pocket's false members (pocket precision 0.84 -> 0.95-0.97)
+  at a cost of 1-2 true ones, and its label-free precision estimate (0.92-0.96) matches the reference precision.
+* Seed stability at 20 halvings: Jaccard 0.972, 0.972, 1.000 (k 242 / 249 / 249) on the competition data; 0.969-0.980 on the
+  first release, where the estimated group size is unstable (295 / 277 / 355: the est_TP curve keeps creeping up far below the
+  cut) while the cut-off is not (254 / 247 / 246).
+* Decision: by the label-free estimate at the common group size (0.9987-0.9989 against 0.9935, all three seeds) the classifier
+  ratio is the better pocket score; the first-release reference agrees (0.9905-0.9911 against 0.9895) and was not used to choose
+  anything (features, classifier setting and cut-off all come from the competition data's shuffle-null estimates). Moved into the
+  pipeline as a third candidate of `task5.pocket_refine(..., df=...)` (`profile_block`, `profile_ratio_curve`,
+  `pocket_profile_ratio`); the pipeline keeps the score with the highest expected F3 at the common group size. The `src` function
+  reproduces the experiment exactly at the same seed (scores, order and curve identical at 2 halvings / 20 draws).
+  Expected effect: about +0.001 to +0.0015 F3 on Task 5 (reference), about +0.0002 to +0.0003 on the leaderboard mean.
+
 **Round 32 summary.** Item 3: 200 halvings / 1,000 null draws make the pocket cut stable (k* 263-265, Jaccard mean 0.997), now the
 `src/task5.py` default; the stable cut is about 265 instead of v24's 288, worth about 0 on the first release (0.9887 -> 0.9892,
 inside the old seed range). Item 1: no column of another behaviour is shifted in the pocket (no 4th dimension); the group is
 persistently high in every period (and its false members are not), but no simple per-account aggregate uses that better than the
 mean over periods. Item 2: the six gap families have neither missed members at their edges nor false members near their cuts; the
 first release's 19 missed anomalies are not pocket members, and 6 of them carry the erratic-stability signature without the low
-stability value, too few to separate from normal accounts without labels. No submission built (user: keep the src defaults only).
+stability value, too few to separate from normal accounts without labels. No submission built (user: keep the src defaults only). Item 4 (added later the same day): a cross-fitted
+classifier ratio on the whole period profile against a block-shuffle null beats the 3-D ratio on the label-free estimate
+(expected F3 0.9987-0.9989 against 0.9935; first-release reference 0.9905-0.9911 against 0.9895) and is in `task5.pocket_refine`
+for v25.
+
+### v25 (user decision, 2026-11-16 ~19:10: build and upload before the GPU queue ends)
+v25 = v24 with the Task 5 pocket from item 4 (pipeline default: 40 halvings, 200 block-shuffle draws, seed 42). `task5/task5.ipynb`
+re-executed: `pocket_refine` compares min-rank (k 339, est. precision 0.574, expected F3 0.976), the 3-D ratio (265, 0.846, 0.994)
+and the period-profile ratio (244, 0.957, 0.999) at the common group size 234 and keeps the last. 2,053 flags (1,809 + 244);
+against v24's 2,097: 46 dropped, 2 added; Tasks 1-4 byte-identical (0 rows changed). Uploaded 20:06 via the Kaggle CLI:
+**public 0.86148 (+0.00013 over v24, about +0.0007 F3 on Task 5; expected +0.0002 to +0.0003)**. Snapshot
+`versions/v25_LB0.86148/`. The master notebook is still the v23 execution (its Task 5 cells are re-run after the GPU queue).
+
+## Round 33 (2026-11-16 evening): new methods for Tasks 1-3 on the CPU while the GPU trains (user brief of ~16:30)
+Brief: methods outside the tree / linear frame, 100% training rows only, CPU at idle priority (2 threads per job, one job at a
+time) so that the dinov2_r2 training is not slowed. Acceptance: nested out-of-fold pooled delta > 0, better in >= 3/5 folds, no
+fold dropping hard (floor -0.0005; Task 3 -0.0002). Base = v24 (Task 1 F2 0.8388, Task 2 macro-F1 0.7584, Task 3 NMAE 0.7946).
+
+**Task 3** (`fn_r33_t3_meta.py`; reference = the pipeline read-out fully nested as in `ex_r30`, 0.79457; 25 minutes at 2 threads).
+
+| candidate | nested NMAE | delta | folds better | per fold | verdict |
+|---|---|---|---|---|---|
+| 1a linear mixture-of-experts gate on P(y>0), segment, history and the member predictions, smooth L1 in THB, started at the exact L1 blend | 0.79457 | -0.00000 | 0/5 | all -0.00000 | fail |
+| 1b MLP gate (same inputs and start) | 0.79457 | -0.00000 | 2/5 | all within +-0.00001 | fail |
+| 1c LightGBM L1 boosted from the blend (`init_score`) | 0.79449 | -0.00008 | 1/5 | -0.00009 +0.00002 -0.00022 -0.00008 -0.00004 | fail |
+| 2a per-row sigma (LightGBM on the absolute log residual, out of fold inside the training folds) in the mixture-median read-out, replacing the member | 0.79455 | -0.00002 | 1/5 | -0.00000 +0.00002 -0.00000 -0.00005 -0.00007 | fail |
+| 2b the per-row-sigma read-out added to the blend pool | 0.79457 | +0.00000 | 1/5 | all +0.00000 | fail |
+| 3 sub-threshold rule for gated rows predicted under 50 THB (zero / floor / scale, chosen on the training folds) | 0.79457 | +0.00000 | 0/5 | all 0 | fail |
+
+* The gates do not move from their start: the exact L1 blend is already the optimum of the smooth-L1 objective in THB, and no
+  input (P(y>0), segment, history) says where another member mix would be better. Boosting from the blend only fits noise.
+* Per-row sigma: the predicted sigma barely varies (quartiles 0.149 / 0.156 / 0.170) and correlates only 0.13-0.18 with the
+  absolute residual of the positive validation rows; the LP gives the added read-out zero weight. The noise is close to
+  homoscedastic in log space once the ratio-to-history target is used.
+* Sub-threshold rows are 0.24-0.27% of the rows (mean target 16-21 THB against a mean prediction of 24-27 THB); the training
+  folds pick "no rule" in all five folds.
+* Task 3 stays at its measured ceiling (rounds 13, 17, 30): nothing to add to v25.
