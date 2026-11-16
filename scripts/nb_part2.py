@@ -467,10 +467,20 @@ lr2_oof, lr2_test, STACKER2 = stack_multi(m2, y2, folds2)
 kde2 = cached("t2_kde_nb", lambda: task2.kde_nb_cv(*task2.load(), y2, folds2))
 mix2 = lambda p_stack, p_kde, w=None: (1 - (KDE_W2 if w is None else w)) * p_stack + (KDE_W2 if w is None else w) * p_kde
 kde_grid2 = {w: optimize_class_weights(y2, mix2(lr2_oof, kde2["oof"], w)) for w in (0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0)}
-KDE_W2 = max(kde_grid2, key=lambda w: kde_grid2[w][1])
+# Round 34: the weight and the class multipliers are chosen on a SOFT macro-F1 (each row assigned by softmax((log p + v) / 0.1),
+# L-BFGS) instead of a Powell search on the raw macro-F1, which is a step function: nested, Powell picked weights 0.3-0.9 and
+# log-multipliers from -0.05 to +0.26 depending on the fold, the soft search 0.6 (27 of 30 folds) and nearly the same multipliers
+# every time. Nested gain +0.0003 to +0.0007 on four stacker splits and +0.0002 to +0.0012 on six fresh ones (mean +0.0006,
+# row-bootstrap 95% CI [+0.0001, +0.0011]; experiments/claude/fr_r34_t2_calib.py, fv_r34_t2_soft_confirm.py).
+from src.metrics import optimize_class_weights_soft
+soft_grid2 = {w: optimize_class_weights_soft(y2, mix2(lr2_oof, kde2["oof"], w)) for w in (0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)}
+KDE_W2 = max(soft_grid2, key=lambda w: soft_grid2[w][1])
 stack2_oof, stack2_test = mix2(lr2_oof, kde2["oof"]), mix2(lr2_test, kde2["test"])
-W2, SCORE2 = kde_grid2[KDE_W2]
-print("KDE weight -> macro-F1 with class multipliers (in-sample):", {w: round(s_, 4) for w, (_, s_) in sorted(kde_grid2.items())}, "-> chosen", KDE_W2)
+W2 = soft_grid2[KDE_W2][0]
+SCORE2 = macro_f1(y2, apply_class_weights(stack2_oof, W2))
+print("KDE weight -> soft macro-F1 (in-sample):", {w: round(s_, 4) for w, (_, s_) in sorted(soft_grid2.items())}, "-> chosen", KDE_W2)
+print("KDE weight -> macro-F1 with Powell multipliers on the raw macro-F1 (in-sample, v19-v25 rule):",
+      {w: round(s_, 4) for w, (_, s_) in sorted(kde_grid2.items())}, f"; with the soft-search multipliers at {KDE_W2}: {SCORE2:.4f}")
 rows = [[k, macro_f1(y2, v["oof"].argmax(1))] for k, v in m2.items()]
 rows += [["Mean of probabilities", macro_f1(y2, np.mean([v["oof"] for v in m2.values()], 0).argmax(1))],
          ["LogReg stacker (OOF)", macro_f1(y2, lr2_oof.argmax(1))],
@@ -492,7 +502,7 @@ for i, v in enumerate(per_cls):
     axes[1].text(i, v, f"{v:.3f}", ha="center", va="bottom", fontsize=8.5)
 axes[1].set_ylim(0, 1); axes[1].set_title("Per-segment F1")
 plt.tight_layout(); savefig(fig, "t2_confusion"); plt.show()
-summary.append(["Task 2", "macro-F1", SCORE2, "4 L1 models -> multinomial stacker, averaged with a KDE naive Bayes -> class multipliers"])
+summary.append(["Task 2", "macro-F1", SCORE2, "4 L1 models -> multinomial stacker, averaged with a KDE naive Bayes -> class multipliers (soft macro-F1 search)"])
 """)
 md(r"""
 The confusion matrix mirrors the 2×2 design. Almost all errors fall between segments that differ in **only one** latent factor:

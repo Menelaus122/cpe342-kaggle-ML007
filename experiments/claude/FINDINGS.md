@@ -2183,6 +2183,24 @@ fold dropping hard (floor -0.0005; Task 3 -0.0002). Base = v24 (Task 1 F2 0.8388
 * RuleFit alone reaches F2 0.8323 and its log-odds correlate 0.94-0.97 with the tree members (0.70 with the logistic member): a
   sparse re-expression of the same trees.
 
+**Task 1, added from the literature: cost-sensitive level 2** (`fq_r33_t1_costsens.py`; the F-beta-optimal rule is a cut on the
+posterior, i.e. cost-sensitive classification with class weights (1 - t) : t, Koyejo et al. 2014 / Parambath et al. 2014; every
+meta-model of the v22 level 2 fitted with a positive-class weight, so that the weighted log-loss is steepest near the cut).
+
+| candidate | delta on the four splits | folds better | worst fold | verdict |
+|---|---|---|---|---|
+| A positive weight 5 | -0.00014 +0.00008 +0.00005 +0.00020 | 3 2 3 3 | -0.00097 -0.00018 -0.00054 -0.00022 | fail |
+| B positive weight 3 | -0.00008 +0.00013 +0.00034 +0.00007 | 3 2 3 3 | -0.00128 -0.00018 -0.00014 -0.00030 | fail |
+| C mean of the v22 level 2 and A (standardised) | -0.00007 +0.00018 +0.00006 +0.00030 | 2 4 3 3 | -0.00078 -0.00023 -0.00020 -0.00022 | fail |
+
+* Means of +0.00005 to +0.00012 with both signs over the folds: re-weighting moves 0.2-0.6% of the labels at random. The
+  unweighted posterior is already accurate near the cut (the level 2 is well calibrated there), so there is nothing to re-focus.
+
+**Round 33 summary.** Of the new-method candidates for Tasks 1-3 beyond the tree / linear frame, none passes the fold rule.
+Task 1 (soft-F2 combiners, k-NN purity, RuleFit, cost-sensitive level 2) and Task 3 (mixture-of-experts gates, per-row sigma,
+sub-threshold rule) confirm the measured ceilings; Task 2's only signal (Dirichlet calibration, positive mean with swinging folds)
+led to round 34.
+
 **Task 2** (`fm_r33_t2_gam_dirichlet.py`; reference = the v20 blend nested as in `ev_r30`: 0.7573 / 0.7572 / 0.7564 / 0.7574 on
 the pipeline folds and stacker split seeds 1, 2, 3; 108 minutes at 2 threads). Alone (argmax, no multipliers): spline GAM 0.7548
 (log-loss 0.6220), GAM + 6 tensor pairs 0.7528 (0.6250), KDE naive Bayes 0.7560 (0.6251).
@@ -2204,6 +2222,21 @@ the pipeline folds and stacker split seeds 1, 2, 3; 108 minutes at 2 threads). A
   but single folds drop by 0.0007-0.0019, beyond the -0.0005 floor: 20 parameters per model, then a Powell search of the class
   multipliers on a step function. Round 34 tests the two-parameter version and smoother multiplier searches.
 * The Whale factor adds a dependence between four spending columns that the stacker's trees already use; no gain.
+
+**Task 2, added from the literature: KDE naive Bayes in a pooled normal-score space** (`fp_r33_t2_kde_zspace.py`; transformation
+kernel density estimation, Wand, Marron & Ruppert 1991 / Geenens 2014: no boundary bias, no skewed marginals; the transform is the
+same for every class, so its Jacobian cancels in the posterior). Alone (argmax): raw-scale 0.7560 (log-loss 0.6251), z-space with
+Silverman's bandwidth 0.7559 (0.6263), 0.7 x Silverman 0.7544 (0.6294), geometric mean of raw and z-space 0.7563 (0.6251);
+argmax agreement raw vs z-space 0.985.
+
+| candidate (replaces the KDE naive Bayes in the blend) | delta on the four splits | folds better | worst fold | verdict |
+|---|---|---|---|---|
+| z-space, Silverman | -0.0001 -0.0002 +0.0002 -0.0002 | 3 1 2 2 | -0.0013 -0.0012 -0.0010 -0.0012 | fail |
+| z-space, 0.7 x Silverman | -0.0009 -0.0005 +0.0001 -0.0008 | 0 2 3 0 | -0.0023 -0.0019 -0.0010 -0.0019 | fail |
+| geometric mean raw + z-space | -0.0001 -0.0005 +0.0004 -0.0003 | 3 2 3 3 | -0.0012 -0.0023 -0.0011 -0.0018 | fail |
+
+* The raw-scale densities with point masses at the clip bounds are already adequate; the boundary and skewness corrections change
+  1.5% of the argmax labels without a gain, and a smaller bandwidth over-fits. The naive Bayes member is at its ceiling.
 
 ## Round 34 (2026-11-16 night): fold-to-fold swings of round 33 and further untried methods (user brief of ~20:10)
 CPU at idle priority beside the GPU training (epoch 11 took 1,874 s with both CPU jobs suspended for 80% of it, against
@@ -2252,13 +2285,19 @@ experiment had used; 13 minutes).
 * Mean +0.00058, positive on 6/6 fresh splits (10/10 with the first four); row-bootstrap 95% CI of the mean [+0.00006, +0.00109],
   P(delta > 0) 0.988: the same size as on the selection splits (+0.00052), so no selection effect to speak of. Under the fold rule
   it still fails (seed 7: 2/5 folds; seeds 6 and 8: folds at -0.0010 / -0.0009).
-* Why it helps: the soft search always picks the weight 0.6 (30 of 30 folds here) and nearly the same log-multipliers in every
-  fold (+0.17..+0.23, +0.19..+0.24, +0.25..+0.29), while Powell on the step function picks weights 0.3-0.7 and multipliers
-  from -0.05 to +0.18. The gain is variance removed from the decision rule, and the soft optimum sits at larger minority-class
-  multipliers than the noisy raw optimum.
+* Why it helps: the soft search picks the weight 0.6 in 27 of 30 folds here (0.7 in 3) and nearly the same log-multipliers in
+  every fold (+0.17..+0.24, +0.16..+0.25, +0.23..+0.30), while Powell on the step function picks weights 0.3-0.9 (0.5 in 13 folds,
+  0.6 in 8) and log-multipliers from -0.05 to +0.26. The gain is variance removed from the decision rule, and the soft optimum
+  sits at larger multipliers for classes 1-3 than the noisy raw optimum.
 * **User decision (2026-11-16 ~21:50): for Task 2 a candidate passes when its mean on the fresh splits is positive and the
   row-bootstrap 95% CI lower bound is above 0** (the fold floor is below the fold noise there). 1c(B) passes; it goes into the
   pipeline for v26 (`src/metrics.optimize_class_weights_soft`).
+* In the pipeline (prepared for v26, not uploaded): `scripts/nb_part2.py` chooses the KDE weight and the class multipliers with
+  `optimize_class_weights_soft` (weights 0.3-0.9, as tested); `task2/task2.ipynb` re-executed. Weight 0.6 (unchanged), multipliers
+  Casual 0.842, Grinder 1.030, Social 1.032, Whale 1.097; 172 of 25,889 test labels change (0.66%: Casual -> Grinder 79,
+  Casual -> Social 32, Social -> Whale 43, Grinder -> Whale 14, 4 others; predicted Casual share 0.412 -> 0.408). The in-sample
+  OOF macro-F1 printed by the notebook is 0.7577 against 0.7584 for the Powell multipliers: Powell's in-sample number is the
+  optimistic one (it fits the step function of the rows it is scored on); nested, the soft search is +0.0006 better.
 
 **Task 1, item 2b: bootstrap-smoothed cut-off** (`fs_r34_t1_boot_threshold.py`; 200 resamples of the training folds per fold).
 
@@ -2290,3 +2329,9 @@ cheater rate, and for 16 mechanical / game-sense columns the residual against pl
   AUC 0.437-0.450 against 0.441 for the pipeline's `mech_minus_sense`.
 * A tenth member moves 0.2-0.4% of the labels and its mean effect (+0.00002 for M1, +0.00010 for the control) is inside that noise.
 
+**Round 34 summary.** Task 2: the soft macro-F1 search for the blend weight and class multipliers is the one accepted change
+(+0.0006 nested on ten stacker splits, six of them fresh; user rule for Task 2: positive mean with the row-bootstrap 95% CI above
+0); it is in the pipeline for v26. Temperature-only log-linear blends, winsorised evidence, the bootstrap-averaged search and the
+z-space KDE fail. Task 1: bootstrap-smoothed cut-offs and missingness / skill-stratified features fail. Task 4 items (photometric
+TTA, DINOv2-L fold 0) run in the GPU queue after the dinov2_r2 training. **User decision (2026-11-16 ~22:00): the tabular
+experiments (Tasks 1-3, 5) are closed after these runs; the remaining effort goes to Task 4.**
