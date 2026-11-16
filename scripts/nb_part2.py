@@ -165,7 +165,7 @@ print(f"{len(gc_table)} isolated tail clusters -> {len(gc_fams)} families -> {ga
 det_scores = {}
 for name, fn in task5.DETECTORS.items():
     t0 = time.time()
-    s = fn(Z5, device=DEVICE) if name == "AutoEncoder" else fn(Z5)
+    s = fn(Z5)                                   # the autoencoder always trains on the CPU
     det_scores[name] = task5.robust_z(s)
     print(f"  {name:17s} {time.time() - t0:5.1f}s")
 
@@ -762,7 +762,8 @@ md(r"""
 5. **Are the families complete?** The gap detector of §5.3 scans the raw columns. A planted behaviour could hide from it if it only shows up as a *change* against the account's own history. So we rerun the same detector on the derived per-account features: period-4 shift, jumps, burstiness, all-period levels and geo hops. Every isolated group it finds there lies inside the six families. Two independent views of the data agree that there is no further *gap-separated* population. Point 7 looks for a group that has no gap at all.
 6. **Union or families?** Task 5 has no labels, so we cannot see the organisers' anomaly definition. $F_3$ weighs recall 9× more than precision: the Bayes-optimal $F_\beta$ decision flags every account whose anomaly probability exceeds $F^*/(1+\beta^2) \approx F^*/10$ (Lipton et al., 2014). That argues for adding the ensemble and rule alerts *if* they have a real chance of being anomalies. The table below scores each candidate rule as if each of the others were the truth. The evidence says the extra alerts do not clear that bar: they look like the noisy edge of normal behaviour (point 4), and nothing outside the families forms a population (point 5). We therefore do not add them. A submission using the union (v4: public LB 0.69429 against 0.69663 for the families) agrees with this.
 7. **A group without a gap: dependence pockets.** A behaviour can be unusual in two features *at once* without being extreme in either, so it leaves no 1-D gap. Normal accounts draw their features almost independently: on a 20×20 quantile grid of a feature pair, every cell should then hold $n/400$ accounts. We scan all ~11,300 feature pairs outside the families (pairs built from the same behaviour, or from a built-in ratio such as km per login, are skipped) and record each pair's most over-full cell, $z = (\text{observed} - \text{expected})/\sqrt{\text{expected}}$. The noise level is the largest $z$ of the same scan on column-shuffled data, which keeps every marginal and destroys every group. Exactly **one** pocket clears it by far: very high match-to-match spread of KDA *and* of accuracy (erratic performance, e.g. a shared or boosted account). After flagging it, no pocket is left above the noise level.
-8. **A label-free cut-off for the pocket.** Score = the lower of the two rank percentiles (high only if both are high). Shuffling the columns again gives, for every cut-off $k$, the expected number of normal accounts among the top $k$; so $k$ minus that number estimates the true members, without labels. We choose $k$ to maximise the expected $F_3$, counting the families as true. Each flagged account then has a much higher chance of being anomalous than the $F^*/10$ bar of point 6. The final flags are the **six families plus the pocket**.
+8. **A label-free cut-off for the pocket.** Score = the lower of the two rank percentiles (high only if both are high). Shuffling the columns again gives, for every cut-off $k$, the expected number of normal accounts among the top $k$; so $k$ minus that number estimates the true members, without labels. We choose $k$ to maximise the expected $F_3$, counting the families as true. Each flagged account then has a much higher chance of being anomalous than the $F^*/10$ bar of point 6.
+9. **The shape of the pocket.** Two refinements, both without labels. (a) A pair scan sees two columns at a time, so the pocket may also be shifted in a third column of the same kind. For every other all-period level column, we compare the provisional pocket's mean rank with what its two pocket columns predict (least squares fitted on the other accounts). A column joins when its $|z|$ clears the Bonferroni bound at $\alpha = 0.001$. Exactly one does: performance stability ($z \approx 16$; every other column has $|z| < 2$). (b) The min-rank score flags a square corner. By the Neyman–Pearson lemma, the most powerful region for "real data" against the column-shuffle null is a level set of the density ratio $p(x)/\prod_j p_j(x_j)$, which in rank space is the copula density; $1 - 1/\text{ratio}$ is the local posterior of not being a normal account (Efron's local false discovery rate). We estimate the ratio as a smoothed 3-D histogram ratio in normal-score space, **cross-fitted**: each account is scored by the ratio fitted on the other half of the accounts (20 random splits, averaged), so the region is never fitted to the accounts it scores. The cut-off rule of point 8 is unchanged. The two scores are compared at one common group size, and the one with the higher expected $F_3$ is kept. The density ratio flags fewer accounts at a much higher estimated precision. The final flags are the **six families plus the pocket**.
 """)
 code(r"""
 members = [k for k in det_scores if k != "LOF"]
@@ -824,10 +825,21 @@ print(f"dependence-pocket scan outside the families: {len(scan5):,} feature pair
       f"{noise5:.1f}; pockets above it: {len(sig5)}")
 display(scan5.head(5).round(1))
 pocket_feats5 = sorted(set(sig5.a) | set(sig5.b))
-pocket5, pinfo5 = task5.pocket_detector(X5, gap5, pocket_feats5)
-print(f"pocket detector on {pocket_feats5}: estimated group size {pinfo5['group_size']:.0f}; cut-off k = {pinfo5['k']} "
-      f"(estimated members {pinfo5['est_tp']:.0f}, precision {pinfo5['precision']:.2f}); expected F3 families only "
-      f"{pinfo5['expected_f_known_only']:.3f} -> with the pocket {pinfo5['expected_f']:.3f}")
+pocket0_5, pinfo0_5 = task5.pocket_detector(X5, gap5, pocket_feats5)
+print(f"min-rank pocket on {pocket_feats5}: estimated group size {pinfo0_5['group_size']:.0f}; cut-off k = {pinfo0_5['k']} "
+      f"(estimated members {pinfo0_5['est_tp']:.0f}, precision {pinfo0_5['precision']:.2f})")
+# point 9: one more column of the same kind, and the Neyman-Pearson (cross-fitted density-ratio) region
+pocket5, pinfo5 = task5.pocket_refine(X5, gap5, pocket0_5, pinfo0_5, pocket_feats5)
+print(f"further level column the provisional pocket is shifted in: {pinfo5['extra']} (|z| bound {pinfo5['bound']:.2f}, "
+      f"Bonferroni alpha = 0.001 over {len(pinfo5['shift_table'])} columns)")
+display(pinfo5["shift_table"].head(5).round(3))
+if "comparison" in pinfo5:
+    display(pinfo5["comparison"].style.format(lambda v: f"{v:.3f}" if isinstance(v, float) else str(v)))
+pocket_feats5 = pinfo5["cols"]
+print(f"pocket = {pinfo5['method']} on {pocket_feats5}: cut-off k = {pinfo5['k']} (estimated members {pinfo5['est_tp']:.0f}, "
+      f"precision {pinfo5['precision']:.2f}); expected F3 families only {pinfo5['expected_f_known_only']:.3f} -> with the pocket "
+      f"{pinfo5['expected_f']:.3f}; kept {int((pocket5 & pocket0_5).sum())} of the min-rank pocket's {int(pocket0_5.sum())}, "
+      f"added {int((pocket5 & ~pocket0_5).sum())}")
 flag5 = gap5 | pocket5
 pred5 = flag5.astype(int)
 fig, axes = plt.subplots(1, 2, figsize=(12.5, 3.6))
@@ -848,7 +860,8 @@ plt.tight_layout(); savefig(fig, "t5_threshold"); plt.show()
 print(f"FINAL Task 5 flags: {pred5.sum():,} = {pred5.mean():.2%} of accounts (six gap-separated families {gap5.sum():,} + dependence pocket {pocket5.sum():,})")
 AGREE5 = roc_auc_score(gap5, consensus)
 summary.append(["Task 5", "ensemble ROC-AUC vs families (agreement)", AGREE5,
-                "6 gap-separated families (1-D density-gap detector) + 1 dependence pocket (2-D scan, permutation-null cut-off) + 6-detector ensemble cross-check"])
+                "6 gap-separated families (1-D density-gap detector) + 1 dependence pocket (2-D scan, one more shifted column, cross-fitted "
+                "3-D density ratio, permutation-null cut-off) + 6-detector ensemble cross-check"])
 """)
 
 md(r"""
@@ -1126,7 +1139,7 @@ md(r"""
 * **Takeover / VPN abuse** (teleporting logins with a currency drain, or with a purchase spike behind a VPN): freeze outgoing transfers, force a password reset, add step-up authentication, and re-price VPN purchases.
 * **Skill boost + friend purge** (sudden skill jump in the last period, friends removed): account sharing or selling. Review, and notify the owner.
 * **Bots** (one IP, clockwork login times, constant session length, flat KDA): rate-limit, then batch-ban by IP.
-* **Erratic performance** (the dependence pocket: KDA and accuracy swing far more from match to match than for any normal player): shared, boosted or resold accounts. Review; these alerts are the least certain (estimated precision about 0.5), which F3 accepts.
+* **Erratic performance** (the dependence pocket: KDA and accuracy swing far more from match to match than for any normal player, together with a high performance-stability value): shared, boosted or resold accounts. Review; these alerts are the least certain (estimated precision about 0.8), which F3 accepts.
 * **Silent and near-inactive accounts** (no chat at all, or barely active in every period): farm and mule accounts. Watch for transfers into them.
 * **Erratic behaviour** (stability far below any normal player): resellers and shared accounts. Review.
 * **Ensemble or rule alerts outside the families** (not flagged in the submission): a low-priority watch list, since they are statistically closest to normal players.

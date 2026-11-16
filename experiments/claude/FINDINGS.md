@@ -1942,3 +1942,32 @@ all periods of the other behaviours, statics and flags; LightGBM Huber, 5-fold o
 check). Item 3 finds a better reading of the existing pocket: the cross-fitted 3-column density ratio (accuracy_std,
 kda_std, performance_stability) with the expected-F3 cut-off, 263 flags instead of 339, +0.006 F3 on the first release's id block
 and +0.018 expected F3 (label-free) on the competition data. Task 5 stays at v23 until the user decides.
+
+### v24 (user decision, 2026-11-16 ~10:30): the 3-column density-ratio pocket in the pipeline
+The user approved the item 3 change for Task 5; Tasks 1-4 stay identical to v23. `src/task5.py`:
+* `pocket_extra_column`: label-free choice of the third column. Candidates: the other all-period `*_level` columns (more than 50
+  distinct values, behaviours other than the pocket's). For each, the provisional (min-rank) pocket's mean rank against what its
+  two pocket columns predict (least squares on the ranks, fitted on the other accounts outside the families), z = mean residual /
+  (residual SD / sqrt(pocket size)); a column joins when |z| clears the two-sided Bonferroni bound for alpha = 0.001 (4.06 for 20
+  candidates); at most one (the ratio is estimated in at most three dimensions).
+  Competition data: performance_stability_level z 16.4 (mean rank 0.751 vs 0.495 predicted); every other column |z| <= 1.6.
+  First release (reference): the same column, z 16.2; every other |z| <= 1.9.
+* `DensityRatio` / `pocket_density_ratio`: the ff_r31 estimator (bins 0.1 SD, h = 0.40, 20 cross-fitting repeats) with the shuffle
+  null of `pocket_detector` (300 draws, null points scored with a random half's fit).
+* `pocket_refine`: min-rank and density ratio compared at one common group size (the larger estimate); the higher expected F3 is
+  kept, cut at its own maximum. Without a further column the min-rank pocket is returned unchanged.
+Pipeline result (seed 42): min-rank group 201, k 339, expected F3 0.9788; density ratio group 227, **k 288**, est. precision
+0.787, expected F3 0.9970 -> density ratio. Kept 252 of the 339, dropped 87, added 36; **2,097 flags** (1,809 + 288). First
+release (reference only): k 282, F3 against the id block 0.9827 -> 0.9892.
+Seed sensitivity of the cross-fitting (seeds 42, 0-6): k* 288, 263, 265, 286, 265, 265, 272, 264; Jaccard 0.913-1.000; 263 accounts
+in every seed, 292 in any; first-release F3 0.9887-0.9893 over the same seeds. The borderline accounts sit where the expected-F3
+curve is flat; the pipeline keeps its fixed seed 42 (no seed chosen by outcome).
+The Task 5 notebook was executed alone (master notebook deferred until the GPU queue ends, it runs Grad-CAM on the GPU). An empty
+CUDA_VISIBLE_DEVICES does not survive on Windows, so the small autoencoder detector still ran on the GPU next to dinov2_r2 training
+(no error; training continued). The autoencoder only enters the ensemble cross-check, not the flags (families + pocket).
+`submission_v24.csv`: Tasks 1-4 byte-identical to v23, Task 5 2,097 flags (2,061 shared with v23, 87 only in v23, 36 only in v24),
+identical to the standalone check. **Uploaded once with the user's approval (11:59): public LB 0.86135, +0.00174 over v23**
+(about +0.009 F3 on Task 5, above the +0.006 seen on the first release's id block). Snapshot `versions/v24_LB0.86135/`;
+`submission.csv` = v24.
+After the upload (user request): `task5.score_autoencoder` always trains on the CPU (the `device` argument is ignored) and the
+notebook no longer passes the GPU. Task 5 notebook re-executed: autoencoder 42.7 s on the CPU, `task5.csv` byte-identical to v24.
