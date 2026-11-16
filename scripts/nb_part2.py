@@ -271,7 +271,7 @@ md(r"""
 <a id="7"></a>
 # 7. Stacking Ensemble (K-Fold) & Metric-Aware Post-Processing
 
-**Level 1:** diverse model families trained on identical folds: three GBDTs with different tree-growth biases (LightGBM leaf-wise, XGBoost depth-wise, CatBoost oblivious trees), plus a bagged randomised-tree ensemble (ExtraTrees) and a linear model (logistic regression on Gaussian-rank features). Task 1 adds four members built the way last year's 1st-place team built theirs (CPE342 1/2025, public repo [Saltywan/CPE342-KAGGLE](https://github.com/Saltywan/CPE342-KAGGLE)): Random Forest, LightGBM, XGBoost and CatBoost on 24 of the 31 raw columns with training-median imputation, each averaged over two seeds. They see the data differently from our members, and adding them raises the nested OOF F2 by +0.0016 (95% CI [+0.0008, +0.0024], better in 5/5 folds).
+**Level 1:** diverse model families trained on identical folds: three GBDTs with different tree-growth biases (LightGBM leaf-wise, XGBoost depth-wise, CatBoost oblivious trees), plus a bagged randomised-tree ensemble (ExtraTrees) and a linear model (logistic regression on Gaussian-rank features). Task 1 adds four members built the way last year's 1st-place team built theirs (CPE342 1/2025, public repo [Saltywan/CPE342-KAGGLE](https://github.com/Saltywan/CPE342-KAGGLE)): Random Forest, LightGBM, XGBoost and CatBoost on 24 of the 31 raw columns with training-median imputation, each averaged over two seeds. They see the data differently from our members, and adding them raises the nested OOF F2 by +0.0016 (95% CI [+0.0008, +0.0024], better in 5/5 folds). **10-seed bags (round 30).** The eight stochastic members are each averaged over 10 model seeds (log-odds mean; same features, settings and folds). Under the level 2 below, nested on four stacker splits, $F_2$ rises by +0.00023 (better in 3, 3, 5 and 4 of 5 folds, worst fold −0.00036). This passes the acceptance rule used since 16 Nov 2026 (pooled gain > 0, at least 3 of 5 folds better, no fold below −0.0005); under the stricter rule of round 27 (4 of 5 folds) it had been left out.
 
 **Level 2:** a regularised logistic-regression stacker on the level-1 OOF log-odds. The stacker is itself cross-validated **on the same folds**, so its reported score is also out-of-fold. Its test input is the fold-averaged level-1 test predictions. Task 1 averages the logistic stacker with two small tree meta-models on the same nine log-odds (LightGBM with 8 leaves and CatBoost of depth 4, three seeds each; mean of the three log-odds): with meta-models and cut-off both nested this adds +0.0002 to +0.0006 F2 on four stacker splits, better in 4/5 folds on each (round 26).
 
@@ -315,6 +315,44 @@ for kind, nm in (("lgb", "LightGBM-24"), ("xgb", "XGBoost-24"), ("cat", "CatBoos
     m1[nm] = cached(f"t1_{kind}24", lambda kind=kind: seed_avg([run_cv(kind, "binary", {**P24[kind], **seed_kw(kind, s)}, R1, y1, R1_test,
                                                                       folds1, name=f"T1 {kind}24 seed {s}") for s in SEEDS24]))
 
+# Round 30: 10-seed bags of the eight stochastic members (features, hyper-parameters and folds unchanged, only the model seed varies;
+# LogReg is deterministic). Log-odds mean over the seeds of the OOF, the fold-model test and the full-data refit probabilities.
+# Nested under the level 2 on four stacker splits: F2 +0.00023, folds better 3, 3, 5, 4 of 5, worst fold -0.00036
+# (experiments/claude/en_r30_t1_bag10_recheck.py; the bags were trained in round 14 by experiments/claude/by_r14_bag.py, whose seed-42
+# fits equal the single-seed caches above). Cached as t1_bag10_<member>(_full); recomputed below if a cache is missing.
+from src.modeling import refit_full_sklearn, refit_full
+T1_BAG_SEEDS = (42, 100, 2026, 777, 999, 1234, 5555, 8888, 31415, 27182)
+T1_BAG = {"LightGBM": "lgb", "XGBoost": "xgb", "CatBoost": "cat", "ExtraTrees": "et", "RF-24": "rf24",
+          "LightGBM-24": "lgb24", "XGBoost-24": "xgb24", "CatBoost-24": "cat24"}
+P1_BY_KIND = {"lgb": P1_lgb, "xgb": P1_xgb, "cat": P1_cat}
+make_et_s = lambda s: (lambda: ExtraTreesClassifier(n_estimators=400, min_samples_leaf=4, max_features=0.4, class_weight="balanced",
+                                                    n_jobs=-1, random_state=s))
+bag_mean = lambda ps: 1 / (1 + np.exp(-np.mean([logit(p) for p in ps], axis=0)))
+
+def t1_member_seed(key, s):
+    # one seed of one member, built like the single-seed member: dict(oof, test, full)
+    if key in P1_BY_KIND:
+        prm, A, At = {**P1_BY_KIND[key], **seed_kw(key, s)}, X1, X1_test
+    elif key in ("lgb24", "xgb24", "cat24"):
+        prm, A, At = {**P24[key[:-2]], **seed_kw(key[:-2], s)}, R1, R1_test
+    else:
+        make, A, At = (make_et_s(s), X1, X1_test) if key == "et" else (make_rf24(s), R1, R1_test)
+        r = run_cv_sklearn(make, "binary", A.values, y1, At.values, folds1, name=f"T1 {key} seed {s}")
+        return dict(oof=r["oof"], test=r["test"], full=refit_full_sklearn(make, "binary", A.values, y1, At.values)["test"])
+    kind = key[:3] if key.endswith("24") else key
+    r = run_cv(kind, "binary", prm, A, y1, At, folds1, name=f"T1 {key} seed {s}")
+    return dict(oof=r["oof"], test=r["test"], full=refit_full(kind, "binary", prm, A, y1, At, folds1, verbose=False)["test"])
+
+bag1_full = {}
+for nm, key in T1_BAG.items():
+    if load_preds(f"t1_bag10_{key}") is None or load_preds(f"t1_bag10_{key}_full") is None:
+        runs = [t1_member_seed(key, s) for s in T1_BAG_SEEDS]
+        save_preds(f"t1_bag10_{key}", oof=bag_mean([r["oof"] for r in runs]), test=bag_mean([r["test"] for r in runs]))
+        save_preds(f"t1_bag10_{key}_full", test=bag_mean([r["full"] for r in runs]))
+    m1[nm] = load_preds(f"t1_bag10_{key}")
+    bag1_full[nm] = load_preds(f"t1_bag10_{key}_full")
+print(f"Task 1 members: {list(m1)}; {len(T1_BAG)} of them are 10-seed bags")
+
 def stack_binary(models, y, folds, C_=1.0):
     S = np.column_stack([logit(m["oof"]) for m in models.values()])
     St = np.column_stack([logit(m["test"]) for m in models.values()])
@@ -350,7 +388,7 @@ def l2_cv():
 
 sigmoid = lambda z: 1 / (1 + np.exp(-z))
 l2_mix = lambda lr_prob, trees_logit: sigmoid((logit(lr_prob) + 2 * trees_logit) / 3)     # mean of the three log-odds
-l2t = cached("t1_l2_trees", l2_cv)
+l2t = cached("t1_l2_trees_bag10", l2_cv)          # round 30: meta-models on the bagged members
 stack1_oof, stack1_test = l2_mix(lr1_oof, l2t["oof"]), l2_mix(lr1_test, l2t["test"])
 avg1_oof = np.mean([m["oof"] for m in m1.values()], axis=0)
 rows = []
@@ -597,7 +635,7 @@ For each backbone, every fold model (final EMA weights) predicts its held-out fo
 * **ConvNeXt-Tiny** (CNN, IN-12k) at 160×320;
 * **DeiT-III Small/16** (Vision Transformer, IN-22k) at 192×384, with position embeddings resampled to the 12×24 token grid;
 * **HUD-dropout versions** (round 19) of ConvNeXt-Tiny, ConvNeXt-Tiny IN-22k, EfficientNetV2-S IN-21k and DeiT-III-S, and (round 21) of the larger ConvNeXt-Small IN-12k.
-* **DINOv2 ViT-B/14** (self-supervised, LVD-142M; round 28) fine-tuned at 126×238, the images' own aspect ratio (9×17 patches), with lr 5e-5, layer-wise lr decay 0.8, 2 warm-up + 13 cosine epochs and HUD dropout. Alone it is the most robust model on zoomed, darkened and partly hidden frames (fold 0: 70% zoom 0.974 against 0.971 for the other seven together), and it counts three times in the average (weight chosen nested on full / zoom / HUD-hidden views: +0.0006 over equal weights, 5/5 folds). An earlier run of the same backbone with lr 1.5e-5 and decay 0.65 for 10 epochs reached only 0.940: the recipe, not the backbone, was the problem.
+* **DINOv2 ViT-B/14** (self-supervised, LVD-142M; round 28) fine-tuned at 126×238, the images' own aspect ratio (9×17 patches), with lr 5e-5, layer-wise lr decay 0.8, 2 warm-up + 13 cosine epochs and HUD dropout. Alone it is the most robust model on zoomed, darkened and partly hidden frames (fold 0: 70% zoom 0.974 against 0.971 for the other seven together), and it counted three times in the average from v20 (weight chosen nested on full / zoom / HUD-hidden views: +0.0006 over equal weights, 5/5 folds). **Round 30:** with the gamma 3.5 and 75%-grid views added to the criterion, the nested choice moves further away from the two plain members: DINOv2 ×8, each HUD-dropout member ×3, the plain ConvNeXt-T and DeiT-III ×1 (+0.0014 on the mean of the four hard views, better in 5/5 folds, full frames −0.0001). An earlier run of the same backbone with lr 1.5e-5 and decay 0.65 for 10 epochs reached only 0.940: the recipe, not the backbone, was the problem.
 * A **logistic probe on frozen CLIP + DINOv2 + SigLIP 2 features** (round 27) is mixed in at 10%.
 
 **Why HUD dropout.** Occluding parts of validation images shows that the first two models read mostly the on-screen HUD, above all the bottom control strip: with only the centre of the frame visible, fold-0 accuracy falls from 0.988 to 0.934 (PUBE Mobile 0.890). This shortcut is measured on training images: a model that needs the HUD fails on any frame without one (menus, crowds, zoomed or cropped captures). HUD dropout hides, with probability 0.5 per training image, the bottom strip, the top strip and corners, or all borders, or zooms into the central 60–75% (`task4.GPUAugment._hud`). On the same fold-0 validation images it keeps full-frame accuracy (0.9878 → 0.9872, difference inside noise) and raises centre-only accuracy to 0.961 (+0.027, 95% CI [+0.022, +0.033]; PUBE 0.944) and accuracy on a natural 70% centre zoom from 0.961 to 0.968 (+0.008, CI [+0.004, +0.012]). Averaging a normal and a HUD-dropout model is best or near-best on every view (`experiments/claude/cm_r19_t4_hud_eval.py`). (Provenance: the idea was also prompted by low-confidence test frames that looked HUD-less, round 19; the decision rests on the training-image results above.)
@@ -639,7 +677,10 @@ pf["OOF (all folds)"] = [macro_f1(y4, oof_tag[t].argmax(1)) for t in pf.index]
 # Member weights inside the probability average (round 28): the fine-tuned DINOv2 counts three times. It is the most robust single
 # model on HUD-poor and corrupted views, and with its weight chosen nested (4 folds -> 5th; picks 3-4) the balanced macro-F1 over
 # full / zoom / HUD-hidden frames gains +0.0006 over equal weights, better in 5/5 folds (experiments/claude/ea_r28_t4_eight_members.py).
-T4_MEMBER_W = {"dinov2_v2": 3.0}
+# Round 30: weights re-chosen nested on the hard views (70% zoom, HUD hidden, gamma 3.5, 75% grid; v17 rule, uniform class mix,
+# members only): DINOv2 in {3, 4, 5, 6, 8, 10} x each HUD-dropout member in {1, 1.5, 2, 3}, the two plain members at 1; the choice
+# (8-10, 3) gains +0.0014 on the hard-view mean, better in 5/5 folds, full frames -0.0001 (experiments/claude/er_r30_t4_weights_hard.py).
+T4_MEMBER_W = {"dinov2_v2": 8.0, "cnxt_hud": 3.0, "cnxt22k_hud": 3.0, "effv2_hud": 3.0, "deit3_hud": 3.0, "cnxtS_hud": 3.0}
 w4m = np.array([T4_MEMBER_W.get(t, 1.0) for t in T4_TAGS])
 wmean4 = lambda arrs: np.tensordot(w4m / w4m.sum(), np.stack(arrs), axes=1)
 oof4 = wmean4([oof_tag[t] for t in T4_TAGS])
@@ -839,8 +880,9 @@ for kind, nm in (("lgb", "LightGBM-24"), ("xgb", "XGBoost-24"), ("cat", "CatBoos
     f1[nm] = cached(f"t1_{kind}24_full", lambda kind=kind: {"test": np.mean([refit_full(kind, "binary", {**P24[kind], **seed_kw(kind, s)}, R1, y1,
                                                                                          R1_test, folds1, name=f"T1 {kind}24 seed {s}")["test"]
                                                                               for s in SEEDS24], axis=0)})
+f1.update(bag1_full)                              # round 30: full-data refits of the bagged members (10-seed log-odds mean)
 St1 = np.column_stack([logit(blend_full(m1[k]["test"], f1[k]["test"])) for k in m1])
-l2t_full = cached("t1_l2_trees_full", lambda: {"test": l2_trees(np.column_stack([logit(m["oof"]) for m in m1.values()]), y1, St1)})
+l2t_full = cached("t1_l2_trees_full_bag10", lambda: {"test": l2_trees(np.column_stack([logit(m["oof"]) for m in m1.values()]), y1, St1)})
 stack1_test_final = l2_mix(STACKER1.predict_proba(St1)[:, 1], l2t_full["test"])
 pred1_final = (stack1_test_final >= THR1).astype(int)
 changes.append(["Task 1", "labels changed", np.mean(pred1_final != pred1), f"flag rate {pred1.mean():.2%} -> {pred1_final.mean():.2%}"])

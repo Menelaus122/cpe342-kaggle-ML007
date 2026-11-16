@@ -32,3 +32,6 @@ experiments/**/outputs/
 experiments/**/*.npz
 experiments/**/*.npy
 experiments/**/*.csv
+
+# ---- CatBoost training scratch
+catboost_info/
