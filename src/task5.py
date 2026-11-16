@@ -235,11 +235,14 @@ def score_mahalanobis(Z, seed=SEED):
 
 
 def score_autoencoder(Z, epochs=60, seed=SEED, device=None):
-    """Under-complete MLP autoencoder; anomaly score = per-row reconstruction MSE."""
+    """Under-complete MLP autoencoder; anomaly score = per-row reconstruction MSE.
+
+    Always trained on the CPU: `device` is accepted for old callers and ignored, so the detector never takes GPU memory from a
+    Task 4 run on the same machine (on Windows an empty CUDA_VISIBLE_DEVICES does not hide the GPU)."""
     import torch
     import torch.nn as nn
     torch.manual_seed(seed)
-    device = device or "cpu"
+    device = "cpu"
     Xt = torch.tensor(Z, dtype=torch.float32, device=device)
     d = Z.shape[1]
     model = nn.Sequential(nn.Linear(d, 64), nn.GELU(), nn.Linear(64, 16), nn.GELU(),
@@ -441,5 +444,144 @@ def pocket_detector(X, known, feats, n_perm=300, max_k=3000, beta=3.0, seed=SEED
     flags[rest[order[:k_star]]] = True
     info = dict(k=k_star, group_size=g_hat, est_tp=float(est[k_star - 1]), precision=float(est[k_star - 1] / k_star),
                 expected_f=float(f[k_star - 1]), expected_f_known_only=float((1 + b2) * n_known / (b2 * (n_known + g_hat) + n_known)),
-                curve=pd.DataFrame({"k": k[:max_k], "est_tp": est[:max_k], "expected_f": f[:max_k]}))
+                curve=pd.DataFrame({"k": k[:max_k], "est_tp": est[:max_k], "expected_f": f[:max_k]}), order=rest[order])
+    return flags, info
+
+
+# --------------------------------------------------------------------------- pocket shape: one more column and the density ratio
+# The min-rank score flags a square corner of the two pocket columns. Two refinements, both label-free:
+#  (a) the provisional pocket may be shifted in a further column of the same kind (an all-period level) that the pair scan could not
+#      pick, because a pair scan looks at two columns at a time;
+#  (b) by the Neyman-Pearson lemma the most powerful region for "real joint density" against "independent columns" (the shuffle null)
+#      is a level set of the density ratio p(x) / prod_j p_j(x_j). In rank space the denominator is uniform, so the ratio is the copula
+#      density, and 1 - 1/ratio is the local posterior of not being a normal account (Efron's local false discovery rate).
+def pocket_extra_column(X, known, pocket, feats, alpha=0.001):
+    """Which further all-period level column is the provisional pocket shifted in?
+
+    Candidates: the columns of the same kind as `feats` (suffix `_level`, more than 50 distinct values), from behaviours other than
+    those of `feats`. Ranks are taken among the accounts not in `known`. For each candidate, the mean rank of the pocket accounts is
+    compared with what the bulk dependence predicts (least squares of the candidate's rank on the ranks of `feats`, fitted on the
+    accounts outside `known` and the pocket): z = mean residual of the pocket / (residual SD / sqrt(pocket size)). A column is added
+    when |z| clears the two-sided Bonferroni bound for `alpha` over all candidates; at most one (the ratio below is estimated in at
+    most three dimensions). Returns (column or None, table sorted by |z|, bound)."""
+    known, pocket = np.asarray(known, bool), np.asarray(pocket, bool)
+    from scipy.stats import norm
+    base = {_base_feature(c) for c in feats}
+    cands = [c for c in X.columns if c.endswith("_level") and c not in feats and _base_feature(c) not in base and X[c].nunique() > 50]
+    R = X.loc[~known, list(feats) + cands].rank(pct=True)
+    R = R.fillna(0.5)
+    pk = pocket[~known]
+    A = np.column_stack([np.ones(len(R)), R[list(feats)].to_numpy()])
+    rows = []
+    for c in cands:
+        y = R[c].to_numpy()
+        beta_, *_ = np.linalg.lstsq(A[~pk], y[~pk], rcond=None)
+        res = y - A @ beta_
+        z = res[pk].mean() / (res[~pk].std() / np.sqrt(pk.sum()))
+        rows.append((c, float(y[pk].mean()), float((A @ beta_)[pk].mean()), float(z)))
+    tab = pd.DataFrame(rows, columns=["column", "mean rank in pocket", "predicted from the pocket columns", "z"])
+    tab = tab.reindex(tab.z.abs().sort_values(ascending=False).index).reset_index(drop=True)
+    bound = float(norm.isf(alpha / (2 * len(cands))))
+    extra = tab.column[0] if len(tab) and abs(tab.z[0]) > bound else None
+    return extra, tab, bound
+
+
+class DensityRatio:
+    """Cross-fitted smoothed-histogram estimate of log p(z) / prod_j phi(z_j) in normal-score space (d = 2 or 3).
+
+    Each repeat splits the accounts into two random halves; an account is scored with the ratio fitted on the half it is NOT in, and
+    the repeats are averaged, so the region is not tuned to the noise of the accounts it scores. Histogram bins of w SD, Gaussian
+    smoothing of h SD on both the observed counts and the expected (independent normal) counts."""
+
+    def __init__(self, Z, h=0.40, rng=None, reps=20):
+        from scipy.stats import norm
+        rng = np.random.default_rng(SEED) if rng is None else rng
+        self.d, self.h = Z.shape[1], h
+        self.w = 0.05 if self.d == 2 else 0.1
+        self.edges = np.arange(-4.2, 4.2 + 1e-9, self.w)
+        self.p = np.diff(norm.cdf(np.r_[-np.inf, self.edges[1:-1], np.inf]))
+        self.fits = []
+        for _ in range(reps):
+            half = rng.random(len(Z)) < 0.5
+            self.fits.append((half, self._fit(Z[half]), self._fit(Z[~half])))
+
+    def _fit(self, Z):
+        from scipy.ndimage import gaussian_filter
+        H, _ = np.histogramdd(np.clip(Z, -4.199, 4.199), bins=[self.edges] * self.d)
+        E = len(Z) * (np.einsum("i,j->ij", self.p, self.p) if self.d == 2 else np.einsum("i,j,k->ijk", self.p, self.p, self.p))
+        s = self.h / self.w
+        eps = 0.5 / ((2 * np.pi) ** (self.d / 2) * s ** self.d)
+        return np.log((gaussian_filter(H, s, mode="constant") + eps) / (gaussian_filter(E, s, mode="constant") + eps))
+
+    def _look(self, L, Z):
+        idx = np.clip(((np.clip(Z, -4.199, 4.199) + 4.2) / self.w).astype(int), 0, len(self.edges) - 2)
+        return L[tuple(idx.T)]
+
+    def score(self, Z, halves=None):
+        """Log-ratio of each row from the fit on the half it is not in (for null rows: a random half per repeat)."""
+        out = np.zeros(len(Z))
+        for k, (half, LA, LB) in enumerate(self.fits):
+            hh = half if halves is None else halves[k]
+            out += np.where(hh, self._look(LB, Z), self._look(LA, Z))
+        return out / len(self.fits)
+
+
+def pocket_density_ratio(X, known, cols, h=0.40, reps=20, n_perm=300, max_k=3000, seed=SEED):
+    """Pocket score = cross-fitted density ratio of `cols` (normal scores of the ranks among the accounts not in `known`), with the
+    same shuffle-null estimate of the true members among the top k as pocket_detector (null points are scored with a random half's
+    fit). Returns (account indices in score order, est_TP curve of length max_k, score of the accounts not in `known`)."""
+    from scipy.stats import norm
+    rng = np.random.default_rng(seed)
+    known = np.asarray(known, bool)
+    rest = np.where(~known)[0]
+    n = len(rest)
+    Rk = X.loc[~known, cols].rank(method="first").to_numpy()
+    Z = np.nan_to_num(norm.ppf((Rk - 0.5) / n))                       # a missing value sits at the median
+    D = DensityRatio(Z, h, rng, reps)
+    S = D.score(Z)
+    order = np.argsort(-S)
+    Ss = S[order]
+    cnt = np.zeros(n)
+    for _ in range(n_perm):
+        Zp = _shuffle_columns(Z, rng)
+        Sp = np.sort(D.score(Zp, [rng.random(n) < 0.5 for _ in D.fits]))
+        cnt += n - np.searchsorted(Sp, Ss, side="left")
+    cnt /= n_perm
+    est = np.maximum.accumulate(np.arange(1, n + 1) - cnt)
+    return rest[order], est[:max_k], S
+
+
+def pocket_refine(X, known, pocket, pinfo, feats, max_k=3000, beta=3.0, seed=SEED):
+    """Second pass of the pocket: (a) one more column if the provisional pocket is shifted in it (pocket_extra_column), then (b) the
+    cross-fitted density ratio of the pocket columns against the min-rank score. The two est_TP curves are compared at ONE common
+    group size (the larger estimate, so a weak score is not rewarded for under-estimating the group); the score with the higher
+    expected F_beta is kept, cut at its own maximum. Without a further column the min-rank pocket is returned unchanged.
+    Returns (flags over all accounts, info dict)."""
+    known = np.asarray(known, bool)
+    extra, tab, bound = pocket_extra_column(X, known, pocket, feats)
+    info = dict(extra=extra, shift_table=tab, bound=bound, cols=list(feats), method="min-rank")
+    if extra is None:
+        return np.asarray(pocket, bool), {**pinfo, **info}
+    cols = list(feats) + [extra]
+    order_r, est_r, _ = pocket_density_ratio(X, known, cols, max_k=max_k, seed=seed)
+    est_m = pinfo["curve"].est_tp.to_numpy()
+    n_known, b2 = int(known.sum()), beta ** 2
+    G = max(float(est_m.max()), float(est_r.max()))
+    k = np.arange(1, max_k + 1)
+    curves = {}
+    for name, est, order in (("min-rank", est_m, pinfo["order"]), ("density ratio", est_r, order_r)):
+        f = (1 + b2) * (n_known + est) / (b2 * (n_known + G) + n_known + k)
+        ks = int(np.argmax(f)) + 1
+        curves[name] = dict(k=ks, est_tp=float(est[ks - 1]), precision=float(est[ks - 1] / ks), expected_f=float(f[ks - 1]),
+                            group_size=float(est.max()), order=order, f=f)
+    best = max(curves, key=lambda m: curves[m]["expected_f"])
+    c = curves[best]
+    flags = np.zeros(len(known), bool)
+    flags[c["order"][:c["k"]]] = True
+    comp = pd.DataFrame({m: {"columns": " x ".join(feats if m == "min-rank" else cols), "estimated group size": v["group_size"],
+                             "cut-off k": v["k"], "estimated members": v["est_tp"], "estimated precision": v["precision"],
+                             f"expected F{beta:g} (common group size)": v["expected_f"]} for m, v in curves.items()}).T
+    info.update(method=best, cols=list(feats) if best == "min-rank" else cols, k=c["k"], est_tp=c["est_tp"], precision=c["precision"],
+                expected_f=c["expected_f"], group_size=G, comparison=comp,
+                expected_f_known_only=float((1 + b2) * n_known / (b2 * (n_known + G) + n_known)))
     return flags, info
