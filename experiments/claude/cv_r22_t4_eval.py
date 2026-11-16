@@ -194,3 +194,30 @@ for c in [c for c in CANDS if c in P]:
         MEMBER_W.pop(c)
 
 # (Until 2026-11-15 a label-free diagnostic on test images followed here; removed after the TA ruling on test data.)
+
+# Criterion of 2026-11-16 (user): the hard views decide. Pass = mean delta over the four hard views (zoom70, HUD hidden, gamma 3.5,
+# 75% grid) >= +0.0015 and full frames >= -0.0005. Scored under the v17 rule at a uniform class mix, members only (the frozen-feature
+# probe has no gamma / grid views); the same bootstrap resamples (first 500).
+HARD = ["zoom70", "centre_grey", "dark_g35", "grid75"]
+print("\nhard-view criterion (2026-11-16): rule alpha 0.75, uniform class mix, members only; "
+      "pass = mean over zoom70 / HUD hidden / gamma 3.5 / 75% grid >= +0.0015 and full >= -0.0005")
+fw = lambda pred, i: f1_score(yv[i], pred[i], average="macro", sample_weight=wb[i])
+for c in [c for c in CANDS if c in P]:
+    variants = [(f"ensemble + {c} (weight 1)", ens + [c], {})]
+    if c in REPLACES and REPLACES[c] in ens:
+        old = REPLACES[c]
+        wo = MEMBER_W.get(old, 1.0)
+        variants += [(f"{c} in place of {old} (weight {wo:g})", [c if t == old else t for t in ens], {c: wo}),
+                     (f"{c} alongside {old}, both at weight {wo:g}", ens + [c], {c: wo})]
+    a5 = {v: rule(ens, v) for v in ["full"] + HARD}
+    for label, ts, extra in variants:
+        MEMBER_W.update(extra)
+        b5 = {v: rule(ts, v) for v in ["full"] + HARD}
+        for k in extra:
+            MEMBER_W.pop(k)
+        per = {v: fw(b5[v], allr) - fw(a5[v], allr) for v in ["full"] + HARD}
+        hard = np.mean([per[v] for v in HARD])
+        d = [np.mean([fw(b5[v], i) - fw(a5[v], i) for v in HARD]) for i in boot[:500]]
+        ok = hard >= 0.0015 and per["full"] >= -0.0005
+        print(f"  {label:48s} hard mean {hard:+.4f} [{np.quantile(d, .025):+.4f}, {np.quantile(d, .975):+.4f}]  full {per['full']:+.4f} | "
+              + "  ".join(f"{v} {per[v]:+.4f}" for v in HARD) + f"  -> {'PASS' if ok else 'fail'}", flush=True)

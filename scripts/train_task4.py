@@ -45,6 +45,8 @@ def main():
     ap.add_argument("--warmup-epochs", type=int, default=1, help="linear warm-up epochs before the cosine decay (round 28: 2 for ViT-B)")
     ap.add_argument("--grad-ckpt", action="store_true",
                     help="gradient checkpointing: same training, less GPU memory (ConvNeXt-Small at batch 64 on an 8 GB GPU)")
+    ap.add_argument("--sam-rho", type=float, default=0.0, help="round 30: sharpness-aware minimisation radius (0 = off; 0.05 = Foret et al.)")
+    ap.add_argument("--mixstyle", type=int, default=0, help="round 30: MixStyle after the first n stages of a CNN (0 = off)")
     args = ap.parse_args()
     aug_kw = {**({"scale": tuple(args.aug_scale)} if args.aug_scale else {}), **({"p_hud": args.p_hud} if args.p_hud else {}),
               **({"p_grid": args.p_grid} if args.p_grid else {}), **({"p_gray": args.p_gray} if args.p_gray is not None else {}),
@@ -77,7 +79,8 @@ def main():
         model, hist = task4.train_fold(args.model, arr, y, np.arange(len(y)), [], img_size=size, epochs=args.epochs,
                                        bs=args.bs, lr=args.lr, seed=SEED + 100, log=log,
                                        ckpt_path=MODEL_DIR / f"t4_{args.tag}_full.pt", aug_kw=aug_kw, grad_ckpt=args.grad_ckpt,
-                                       layer_decay=args.layer_decay, warmup_epochs=args.warmup_epochs)
+                                       layer_decay=args.layer_decay, warmup_epochs=args.warmup_epochs,
+                                       sam_rho=args.sam_rho, mixstyle_stages=args.mixstyle)
         tp = task4.predict_paths(model, test.path.values, size, tta=True)
         np.savez_compressed(out_path, test_probs=tp, test_file_name=np.array(test.file_name.tolist(), dtype="U"))
         (log_dir / f"t4_{args.tag}_full_history.json").write_text(json.dumps(hist, indent=1))
@@ -93,7 +96,8 @@ def main():
         model, hist = task4.train_fold(args.model, arr, y, tr, va, img_size=size, epochs=args.epochs, bs=args.bs,
                                        lr=args.lr, seed=SEED + f, log=log,
                                        ckpt_path=MODEL_DIR / f"t4_{args.tag}_fold{f}.pt", aug_kw=aug_kw, grad_ckpt=args.grad_ckpt,
-                                       layer_decay=args.layer_decay, warmup_epochs=args.warmup_epochs)
+                                       layer_decay=args.layer_decay, warmup_epochs=args.warmup_epochs,
+                                       sam_rho=args.sam_rho, mixstyle_stages=args.mixstyle)
         vp = task4.predict_array(model, arr[va], size, tta=True)
         tp = task4.predict_paths(model, test.path.values, size, tta=True)
         np.savez_compressed(out_path, val_idx=va, val_probs=vp, test_probs=tp,
