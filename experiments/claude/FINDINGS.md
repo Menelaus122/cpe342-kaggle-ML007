@@ -2945,3 +2945,94 @@ user's rule): fold 0 scored against the v23 members by `fc_r31_t4_v23_eval.py`; 
 variant passes the v24 check (zoom70, HUD hidden, real dark / low-contrast frames all > 0, full >= -0.0005; the hard-view mean rule is
 printed, no longer required). After all folds the member is judged on the laptop against v29 (members + 35% probe).
 `em_r30_t4_hardviews.py` knows the new tag (replaces dinov2_v2); bundle `colab/upload/cpe342_code.zip` rebuilt (35,108,374 bytes).
+
+**Suggestion list from the user (2026-11-17 ~21:45; `train_groups.csv`, `_preview/aug_preview.jpg` and a `train_task4.py` placed in the
+Task 4 data folder; the script was read, not run).** Already in the pipeline: rotation / shear / zoom with black fill, full-circle hue,
+inversion, RandAugment (solarize / posterize / equalize / autocontrast), greyscale, noise, blur, Mixup / CutMix, random erasing,
+ConvNeXt-T IN-22k with label smoothing / EMA / cosine, zoom TTA (rounds 29 / 36: no gain). Not usable: the script's stage 2
+(pseudo-labels from test images; prohibited by the competition rules) and item 5 (test-prediction class shares to set class weights;
+a test statistic, TA ruling). Never tried: channel permutation, JPEG compression, perspective, aspect-changing random crops, training
+without h-flip, rotation / greyscale TTA.
+* `train_groups.csv` (`dup_group`, training images only as provided; how it was built is not known): 574 groups of >= 2 images
+  (2,552 images, 8.1%; two groups of 319 / 326), 2 with mixed labels; 503 of them are split across our folds, but v29's OOF accuracy on
+  those 2,405 images is 0.9892 against 0.9914 on singletons, so near-duplicates do not inflate our OOF (as rounds 18-19 found);
+  re-folding all members is not worth it.
+* **h-flip check** (`gr_r39_t4_flip_check.py`, round-29 caches of the original and flipped full frame, out of fold; balanced macro-F1):
+  every member scores the same or better on the flipped image alone than on the original (e.g. cnxt 0.9852 -> 0.9861, dinov2_v2
+  0.9853 / 0.9853), and the mean (the pipeline's flip TTA) beats the original for every member (+0.0004 to +0.0019) and for v29
+  (0.9905 -> 0.9907; dark frames 0.9795 -> 0.9799). Our flip-trained members do not read the left-right layout, and flip TTA helps.
+  Training without flips would push the members towards the HUD layout, against the HUD-dropout direction that the hard views
+  reward; not pursued.
+
+**Step 3 on Colab, fold-0 gate: PASS** (user's log, 2026-11-17 22:07 local; A100, 106 s per epoch; `dinov2L_hud70`: DINOv2-L/14 at
+126 x 238, lr 3e-5, layer decay 0.85, HUD dropout 0.70, 15 epochs; fold 0 TTA macro-F1 0.9885). Alone on fold 0 against dinov2_v2 (v17
+rule, uniform mix): full 0.9884 vs 0.9855, zoom70 0.9772 vs 0.9720, HUD hidden 0.9614 vs 0.9568, gamma 3.5 0.9669 vs 0.9412, 75% grid
+0.8973 vs 0.8529, real dark frames 0.9807 vs 0.9754: better on every view, HUD hidden included (where LP-FT lost). In the v23 members
+(fold 0): added at weight 4 passes the v24 check (full +0.0010, zoom70 +0.0013, HUD hidden +0.0013, dark +0.0006), at weight 8 too
+(+0.0016 / +0.0029 / +0.0012 / +0.0006); weight 2 and in place of dinov2_v2 fail on the dark frames (+0.0000 / -0.0006). The real-dark
+gain is the thin one. Folds 1-4 and the full refit continue on Colab. The all-fold test against v29 was written before folds 1-4
+were seen: `gt_r39_t4_dinov2L_eval.py` (variants A2 / A4 / A8 / R8 with the probe at 0.35, nested, the user's rule).
+* **Rotation / greyscale TTA: FAIL** (`gs_r39_t4_tta_rotgray.py`, 2 h on the laptop GPU; log `outputs/r39/gs_tta_rotgray.log`; rule fixed
+  before the run). Every set is worse than v29 on almost every view, in every fold: T1 rot +-8 deg full -0.0007, zoom70 -0.0010, HUD
+  hidden +0.0003, dark -0.0033; T2 grey -0.0012 / -0.0035 / -0.0037 / -0.0042; T3 all -0.0008 / -0.0018 / -0.0015 / -0.0035; N never
+  picks a set. Alone, a greyscale copy costs every member 0.015-0.02 on full frames and 0.04-0.06 on zoomed / HUD-hidden ones: colour
+  carries real class information even though the frames are colour-corrupted (our training keeps greyscale at p 0.05; round 27's 0.3
+  failed too). The rotated copies are slightly worse than the original for every member and pull the average down on the dark frames.
+  With round 29 / 36 (zoom, photometric) this closes TTA: the pipeline stays at original + h-flip.
+* **Step 3, all five folds on Colab** (2026-11-18 00:04 local; full refit running). TTA macro-F1 by fold 0.9885 / 0.9889 / 0.9863 /
+  0.9859 / 0.9881 (dinov2_v2 0.9869 / 0.9868 / 0.9872 / 0.9857 / 0.9856: better in 4/5). Alone, all folds (v17 rule, uniform mix): full
+  0.9870 vs 0.9860, zoom70 0.9777 vs 0.9725, HUD hidden 0.9620 vs 0.9539, gamma 0.9664 vs 0.9408, grid 0.8979 vs 0.8606, real dark
+  0.9696 vs 0.9676. Colab's check against the v23 members (`fc_r31_t4_v23_eval.py`): every variant passes the hard-view rule and the
+  v24 check; added at weight 8: full +0.0007, zoom70 +0.0026, HUD hidden +0.0021, dark +0.0009 (by fold +0.0006 +0.0028 -0.0054
+  -0.0014 +0.0068); in place of dinov2_v2: +0.0011 / +0.0024 / +0.0031 / +0.0017 (dark by fold -0.0006 +0.0054 -0.0011 -0.0013
+  +0.0058). The dark-frame gain is the noisy part (2/5 folds positive). The decision is the pre-declared test against v29
+  (`gt_r39_t4_dinov2L_eval.py`), once the files are on the laptop.
+* **Step 3 against v29: FAIL** (`gt_r39_t4_dinov2L_eval.py`, written before folds 1-4 were seen; files pulled from Drive by the
+  connector with the user's go-ahead, 11 files, sizes and contents checked: folds = the pipeline's, test rows in `test.csv` order,
+  fold F1 = the Colab log). Reference v29 0.9907 / 0.9783 / 0.9659 / 0.9799 (full / zoom70 / HUD hidden / dark).
+
+| against v29 (probe 0.35) | full | zoom70 | HUD hidden | dark | gamma | grid | zoom / HUD folds | verdict |
+|---|---|---|---|---|---|---|---|---|
+| A2 added at weight 2 | +0.0001 | +0.0007 | +0.0008 | +0.0006 | +0.0041 | +0.0069 | 5/5 | pass (in-sample) |
+| A4 added at weight 4 | +0.0002 | +0.0009 | +0.0010 | +0.0005 | +0.0088 | +0.0128 | 5/5 | pass (in-sample) |
+| A8 added at weight 8 | +0.0001 | +0.0019 | +0.0022 | -0.0006 | +0.0172 | +0.0179 | 5/5 | fail |
+| R8 in place of dinov2_v2 | +0.0005 | +0.0012 | +0.0021 | -0.0001 | +0.0182 | +0.0205 | 5/5 | fail |
+| **N nested (picks A8 R8 A8 A8 R8)** | **+0.0003** | **+0.0018** | **+0.0016** | **-0.0007** | +0.0175 | +0.0195 | 5/5 | **fail** |
+
+* The member is the strongest single model so far and lifts zoom70 / HUD hidden in 5/5 folds at every weight, but on the real dark /
+  low-contrast frames its effect swings by fold (A8: +0.0005 +0.0020 -0.0060 -0.0030 +0.0032) and turns negative at the weights the
+  nested choice prefers. Design note: the nested choice ranks by the mean of the three deltas while acceptance needs each > 0, so it
+  picks the high weights; a post-hoc selection restricted to variants that pass the rule on the inner folds (computed after seeing
+  the result, information only) fails too (picks A4 A2 A8 R8 A2; dark -0.0010). The dark-frame effect is not confirmed nested;
+  v29 stays. A2 / A4 pass in-sample only.
+* **Brightness / contrast gate between two member weightings: PASS** (`gu_r39_t4_gated.py`, user's idea 2026-11-18 ~01:20; settings,
+  selection and rule fixed before the run; CPU + 1 min GPU for the per-view image statistics, cached in `outputs/r39/t4_view_stats.npz`,
+  full-view values identical to `t4_errors.npz`). An image (as the model sees it: full / 70% zoom / HUD hidden) is "dark" if its mean
+  grey level or its grey SD is at or below the q-quantile of the training frames (thresholds per held-out fold from the other four);
+  dark images use member weights W_dark, the rest W_bright; probe 0.35 throughout. 12 settings: q {0.10, 0.20} x W_dark {v29, A2} x
+  W_bright {A4, A8, R8}; N = per held-out fold the best setting among those meeting the rule on the other four folds (rule-consistent
+  selection, declared before the run). **N picks (q 0.10, W_dark A2, W_bright A8) in all five folds: full +0.0003, zoom70 +0.0011,
+  HUD hidden +0.0017, dark +0.0006; zoom / HUD better in 5/5 folds (+0.0004 to +0.0019), full >= 0 in 5/5, dark by fold +0.0006
+  +0.0000 +0.0000 +0.0000 +0.0020.** Gated share at q 0.10: 13% of full frames, 26% of zoomed, 12% of HUD-hidden ones.
+  Caveats: at q 0.10 the gate covers 99.8% of the evaluation's dark subset, so the dark delta is A2's own (by construction); the
+  evidence beyond A2 is the zoom70 / HUD-hidden gain from A8 on the bright images (+0.0004 / +0.0009 over ungated A2). This is the
+  second test of the same member on the same folds (gt_r39 failed), so some optimism remains.
+
+**v29 -> v30 prepared (user go-ahead 2026-11-18 ~01:40):** `dinov2L_hud70` added to `T4_BACKBONES` with the gate of gu_r39
+(`scripts/nb_part2.py`: `T4_MEMBER_W` with the member at 8, `T4_MEMBER_W_DARK` at 2, `GATE_Q4` 0.10; per-image grey mean / SD cached
+in `outputs/preds/t4_gate_stats.npz`, thresholds from the training images only: brightness 0.179, contrast 0.107, 13.2% of the
+training images gated). Fold histories and the full-refit history fetched from Drive as well. `task4/task4.ipynb` re-executed (log
+`outputs/r39/v30_task4_nb.log`): member-weighted OOF 0.9898, + probe 0.9902; rule at the training mix 0.9896 -> 0.9900, balanced
+0.9907 -> 0.9910; class multipliers still off (nested 0.9901 < argmax + 0.0005). `submission_v30.csv`: **347 of 25,889 Task 4 labels
+change** (1.3%; largest PUBE -> Free Fried 48, FiveN -> Roblock 43, PUBE -> Roblock 38); class shares move by at most 0.21 points;
+Tasks 1, 2, 3, 5 identical to v29. Not uploaded. The gate routes 16.6% of the test images (reported only, nothing chosen from it);
+30 of the 347 changes are on gated images, the rest come from the member at weight 8 on normal frames. On the training images (OOF,
+full frame) the same change flips 41 labels: v30 right 22, v29 right 13, both wrong 6 (net +9, as v29's step).
+Expectation stated before any upload: at the OOF margin about +0.0006 public; at the fraction v28 / v29 realised (12-15%) about
++0.0001; noise about +-0.0003 for ~350 labels. Central 0.8620-0.8622, range 0.8616-0.8627.
+* **v30 uploaded 2026-11-18 01:20 (user's approval; Kaggle CLI, ref 58478489): public 0.86322, +0.00125 over v29**, above the range
+  stated before the upload (0.8616-0.8627): the largest single step since v24. The OOF evidence (net +9 flips, as v29's +0.00005)
+  understated it; consistent with the test images being more shifted than the training images (labels flip 8x as often there), where
+  the stronger, HUD-robust member matters more. Best public score so far. `submission.csv` = v30, snapshot `versions/v30_LB0.86322/`
+  (preds pruned to the git-tracked files, which now include the DINOv2-L member and `t4_gate_stats.npz`), README rows.
+  Note: Kaggle's daily quota resets at 00:00 UTC = 07:00 Thai time (v29 at 20:52 and v30 at 01:20 fell on the same UTC day).

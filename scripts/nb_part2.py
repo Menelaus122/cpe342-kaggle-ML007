@@ -107,6 +107,9 @@ T4_BACKBONES = {   # tag -> (timm model, input HxW) as trained by scripts/train_
     # round 28: DINOv2 ViT-B/14 fine-tuned at the native aspect ratio (--lr 5e-5 --layer-decay 0.8 --warmup-epochs 2 --epochs 15 --p-hud 0.5)
     "dinov2_v2": ("vit_base_patch14_reg4_dinov2.lvd142m", (126, 238)),
     # (round 28 also trained EVA02 ViT-B/14 with this recipe: in v21, 0.85939 vs v20's 0.85948; removed again, see Limitations)
+    # round 39 (v30): DINOv2 ViT-L/14 at the native aspect ratio, trained on a Colab A100 with the same trainer and folds
+    # (--lr 3e-5 --layer-decay 0.85 --warmup-epochs 2 --epochs 15 --p-hud 0.70 --grad-ckpt; colab/t4_colab_train.ipynb)
+    "dinov2L_hud70": ("vit_large_patch14_reg4_dinov2.lvd142m", (126, 238)),
 }
 fold_done = lambda tag: all((C.PRED_DIR / f"t4_{tag}_fold{f}.npz").exists() for f in range(N_FOLDS))
 if not fold_done("cnxt") and RUN_T4_TRAINING:
@@ -646,6 +649,7 @@ For each backbone, every fold model (final EMA weights) predicts its held-out fo
 * **DeiT-III Small/16** (Vision Transformer, IN-22k) at 192×384, with position embeddings resampled to the 12×24 token grid;
 * **HUD-dropout versions** (round 19) of ConvNeXt-Tiny, ConvNeXt-Tiny IN-22k, EfficientNetV2-S IN-21k and DeiT-III-S, and (round 21) of the larger ConvNeXt-Small IN-12k.
 * **DINOv2 ViT-B/14** (self-supervised, LVD-142M; round 28) fine-tuned at 126×238, the images' own aspect ratio (9×17 patches), with lr 5e-5, layer-wise lr decay 0.8, 2 warm-up + 13 cosine epochs and HUD dropout. Alone it is the most robust model on zoomed, darkened and partly hidden frames (fold 0: 70% zoom 0.974 against 0.971 for the other seven together), and it counted three times in the average from v20 (weight chosen nested on full / zoom / HUD-hidden views: +0.0006 over equal weights, 5/5 folds). **Round 30:** with the gamma 3.5 and 75%-grid views added to the criterion, the nested choice moves further away from the two plain members: DINOv2 ×8, each HUD-dropout member ×3, the plain ConvNeXt-T and DeiT-III ×1 (+0.0014 on the mean of the four hard views, better in 5/5 folds, full frames −0.0001). An earlier run of the same backbone with lr 1.5e-5 and decay 0.65 for 10 epochs reached only 0.940: the recipe, not the backbone, was the problem.
+* **DINOv2 ViT-L/14** (round 39, v30; trained on a Colab A100 with the same trainer and folds) at 126×238, lr 3e-5, layer decay 0.85, HUD dropout 0.70. Alone it is the strongest model (OOF: 70% zoom 0.978 vs 0.973 for the DINOv2-B member, HUD hidden 0.962 vs 0.954). It counts **eight times on normal frames and twice on dark / low-contrast ones**: a gate measured on each image (mean grey level or grey-level SD at or below the 10% quantile of the training images). At weight 8 everywhere it lifts zoomed and HUD-hidden frames but loses on the real dark frames; the gated pair, chosen nested from 12 settings fixed before the run (`experiments/claude/gu_r39_t4_gated.py`), gains against v29 full +0.0003, 70% zoom +0.0011, HUD hidden +0.0017, dark frames +0.0006, zoom / HUD better in 5/5 folds.
 * A **probe on frozen foundation features** is mixed in at **35%** (v29; 20% in v28; 10% with a logistic probe in v19-v27). Features of seven frozen backbones, 7,040 per image: CLIP ViT-B/16, DINOv2 ViT-B/14, SigLIP 2 ViT-B/16 (round 27), DINOv2 ViT-L/14 (round 37), SigLIP 2 SO400M/14, EVA-02-L/14 and ConvNeXt-L CLIP (round 38); the probe is a small MLP (one hidden layer of 1,024, dropout 0.2 / 0.5, weight decay, label smoothing; settings fixed before the run, mean of three seeds), fitted on the full frame, the 70% zoom and the HUD-hidden view of every training image. Alone it reaches 0.972 balanced macro-F1 on full frames (logistic probe of v27: 0.937). Round 38 (`experiments/claude/go_r38_t4_superprobe.py`, rule fixed before the run): against v27, full +0.0009, 70% zoom +0.0009, HUD hidden +0.0003, real dark / low-contrast frames +0.0032, better in 5/5 folds; the weight 0.20 was chosen nested in every fold. With a logistic probe the new features did not help. Round 39 (`experiments/claude/gp_r39_t4_probe_heads.py`, rule fixed before the run): the weight grid extended to 0.20-0.35 and chosen nested together with per-backbone L2-normalised features, a mean of three probe heads and confidence-gated mixing; the plain MLP at 0.35 is chosen in four folds (the L2 variant in the fifth), and against v28 the nested choice gives full +0.0006, 70% zoom +0.0011, HUD hidden +0.0001, real dark frames +0.0022, zoom / HUD better in 5/5 folds. Head averaging and gating did not help. Frozen features are not bent towards what separates the training frames, which is why the probe helps on the hard views.
 
 **Why HUD dropout.** Occluding parts of validation images shows that the first two models read mostly the on-screen HUD, above all the bottom control strip: with only the centre of the frame visible, fold-0 accuracy falls from 0.988 to 0.934 (PUBE Mobile 0.890). This shortcut is measured on training images: a model that needs the HUD fails on any frame without one (menus, crowds, zoomed or cropped captures). HUD dropout hides, with probability 0.5 per training image, the bottom strip, the top strip and corners, or all borders, or zooms into the central 60–75% (`task4.GPUAugment._hud`). On the same fold-0 validation images it keeps full-frame accuracy (0.9878 → 0.9872, difference inside noise) and raises centre-only accuracy to 0.961 (+0.027, 95% CI [+0.022, +0.033]; PUBE 0.944) and accuracy on a natural 70% centre zoom from 0.961 to 0.968 (+0.008, CI [+0.004, +0.012]). Averaging a normal and a HUD-dropout model is best or near-best on every view (`experiments/claude/cm_r19_t4_hud_eval.py`). (Provenance: the idea was also prompted by low-confidence test frames that looked HUD-less, round 19; the decision rests on the training-image results above.)
@@ -690,11 +694,46 @@ pf["OOF (all folds)"] = [macro_f1(y4, oof_tag[t].argmax(1)) for t in pf.index]
 # Round 30: weights re-chosen nested on the hard views (70% zoom, HUD hidden, gamma 3.5, 75% grid; v17 rule, uniform class mix,
 # members only): DINOv2 in {3, 4, 5, 6, 8, 10} x each HUD-dropout member in {1, 1.5, 2, 3}, the two plain members at 1; the choice
 # (8-10, 3) gains +0.0014 on the hard-view mean, better in 5/5 folds, full frames -0.0001 (experiments/claude/er_r30_t4_weights_hard.py).
-T4_MEMBER_W = {"dinov2_v2": 8.0, "cnxt_hud": 3.0, "cnxt22k_hud": 3.0, "effv2_hud": 3.0, "deit3_hud": 3.0, "cnxtS_hud": 3.0}
+# Round 39 (v30): the DINOv2-L member at weight 8 on normal frames and 2 on dark / low-contrast ones. Gate, decided per image from
+# the image itself: mean grey level or grey-level SD at or below the 10% quantile of the TRAINING images (thresholds from training
+# images only; at test time a per-image computation like TTA). Chosen nested on training images (experiments/claude/
+# gu_r39_t4_gated.py, 12 settings, rule fixed before the run): the same setting in all five folds; against v29 full +0.0003, 70% zoom
+# +0.0011, HUD hidden +0.0017, real dark frames +0.0006, zoom / HUD better in 5/5 folds. Without the gate the member at weight 8 lifts
+# zoom / HUD but costs on the dark frames (gt_r39_t4_dinov2L_eval.py).
+T4_MEMBER_W = {"dinov2_v2": 8.0, "cnxt_hud": 3.0, "cnxt22k_hud": 3.0, "effv2_hud": 3.0, "deit3_hud": 3.0, "cnxtS_hud": 3.0,
+               "dinov2L_hud70": 8.0}
+T4_MEMBER_W_DARK = {**T4_MEMBER_W, "dinov2L_hud70": 2.0}
+GATE_Q4 = 0.10
+
+
+def t4_grey_stats(paths, chunk=2048):
+    # (mean, SD) of the grey level 0.299 R + 0.587 G + 0.114 B of each native 230 x 120 frame
+    out = np.zeros((len(paths), 2), np.float32)
+    for i in range(0, len(paths), chunk):
+        g = (task4.load_uint8(list(paths[i:i + chunk])).astype(np.float32) / 255) @ np.array([0.299, 0.587, 0.114], np.float32)
+        out[i:i + chunk, 0], out[i:i + chunk, 1] = g.mean((1, 2)), g.std((1, 2))
+    return out
+
+
+gpath = C.PRED_DIR / "t4_gate_stats.npz"
+if not gpath.exists():
+    np.savez(gpath, train=t4_grey_stats(t4_train.path.values), test=t4_grey_stats(t4_test.path.values), test_file_name=t4_names)
+zg = np.load(gpath)
+check_t4_order(zg, "t4_gate_stats")
+thr4 = np.quantile(zg["train"], GATE_Q4, axis=0)                     # brightness and contrast thresholds, training images only
+dark4_tr, dark4_te = (zg["train"] <= thr4).any(1), (zg["test"] <= thr4).any(1)
+print(f"gate thresholds: brightness {thr4[0]:.3f}, contrast {thr4[1]:.3f} -> {dark4_tr.mean():.1%} of the training images gated")
 w4m = np.array([T4_MEMBER_W.get(t, 1.0) for t in T4_TAGS])
-wmean4 = lambda arrs: np.tensordot(w4m / w4m.sum(), np.stack(arrs), axes=1)
-oof4 = wmean4([oof_tag[t] for t in T4_TAGS])
-test4 = wmean4([test_tag[t] for t in T4_TAGS])
+w4d = np.array([T4_MEMBER_W_DARK.get(t, 1.0) for t in T4_TAGS])
+
+
+def wmean4(arrs, dark):
+    s = np.stack(arrs)
+    return np.where(dark[:, None], np.tensordot(w4d / w4d.sum(), s, axes=1), np.tensordot(w4m / w4m.sum(), s, axes=1))
+
+
+oof4 = wmean4([oof_tag[t] for t in T4_TAGS], dark4_tr)
+test4 = wmean4([test_tag[t] for t in T4_TAGS], dark4_te)
 if len(T4_TAGS) > 1:
     pf.loc["probability average (equal weights)"] = [np.nan] * N_FOLDS + [macro_f1(y4, np.mean([oof_tag[t] for t in T4_TAGS], axis=0).argmax(1))]
     pf.loc["probability average (member weights)"] = [np.nan] * N_FOLDS + [macro_f1(y4, oof4.argmax(1))]
@@ -756,7 +795,7 @@ for i, v in enumerate(pc4[::-1]):
     axes[1].text(v, i, f" {v:.4f}", va="center", fontsize=8.5)
 axes[1].set_xlim(0.9, 1.0); axes[1].set_title("Per-class F1 (OOF)")
 plt.tight_layout(); savefig(fig, "t4_confusion"); plt.show()
-summary.append(["Task 4", "macro-F1", SCORE4, f"{' + '.join(T4_TAGS)} 5-fold, GPU aug + Mixup/CutMix, EMA, h-flip TTA{f' + {PROBE_W4:.0%} frozen-feature probe' if HAS_PROBE4 else ''}, balanced-prior rule (alpha 0.75)"])
+summary.append(["Task 4", "macro-F1", SCORE4, f"{' + '.join(T4_TAGS)} 5-fold, GPU aug + Mixup/CutMix, EMA, h-flip TTA{', brightness / contrast gate for DINOv2-L (x8 / x2)' if 'dinov2L_hud70' in T4_TAGS else ''}{f' + {PROBE_W4:.0%} frozen-feature probe' if HAS_PROBE4 else ''}, balanced-prior rule (alpha 0.75)"])
 """)
 code(r"""
 # Diversity of the members on held-out TRAINING images: pairwise agreement of their OOF labels (test images are not used)
@@ -971,7 +1010,7 @@ for tag in T4_TAGS:
         check_t4_order(np.load(pth), pth.stem)
     test4_final.append(blend_full(test_tag[tag], np.load(pth)["test_probs"]) if pth.exists() else test_tag[tag])
     print(f"Task 4 {tag}: full-data model {'included' if pth.exists() else 'NOT found -> 5-fold ensemble only'}")
-test4_final = wmean4(test4_final)
+test4_final = wmean4(test4_final, dark4_te)
 if HAS_PROBE4:
     pth = C.PRED_DIR / "t4_probe_full.npz"
     check_t4_order(np.load(pth), pth.stem)
