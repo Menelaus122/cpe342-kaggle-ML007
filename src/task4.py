@@ -292,7 +292,7 @@ def predict_paths(model, paths, img_size, bs=128, tta=True, chunk=4096):
 
 def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epochs=10, bs=64,
                lr=2e-4, wd=0.05, label_smoothing=0.1, mix_prob=0.8, seed=42, log=print, ckpt_path=None, aug_kw=None,
-               class_balanced=False, layer_decay=None, grad_ckpt=False, warmup_epochs=1, sam_rho=0.0, mixstyle_stages=0):
+               class_balanced=False, layer_decay=None, grad_ckpt=False, warmup_epochs=1, sam_rho=0.0, mixstyle_stages=0, accum=1):
     """Train one fold on the shared preloaded uint8 array `arr` (rows tr_idx); returns
     (model carrying the final EMA weights, history). With an empty `va_idx` it trains on all given
     rows without per-epoch validation (final Train+Val refit). class_balanced=True draws each epoch's rows with
@@ -303,10 +303,14 @@ def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epo
     (two forward / backward passes per step).
     mixstyle_stages > 0 (round 30, CNNs with `.stages`): MixStyle (Zhou et al., ICLR 2021) after the first n stages while training:
     with probability 0.5 per batch, each sample's channel mean / SD is mixed with another sample's (Beta(0.1, 0.1) weights).
-    The EMA copy is taken before the hooks are attached, so inference never mixes styles."""
+    The EMA copy is taken before the hooks are attached, so inference never mixes styles.
+    accum > 1 (round 37): gradient accumulation; each optimiser step still sees `bs` images, split into `accum` micro-batches of
+    bs / accum (same schedule, same effective batch, less GPU memory: DINOv2-L at 126x238 needs it on an 8 GB card)."""
     from sklearn.metrics import f1_score
     from timm.utils import ModelEmaV3
 
+    if accum > 1 and (sam_rho > 0 or bs % accum):
+        raise ValueError("accum needs sam_rho = 0 and bs divisible by accum")
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     device = "cuda"
@@ -361,18 +365,20 @@ def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epo
             perm = rng.permutation(tr_idx)
         for b in range(n_steps_ep):
             idx = np.sort(perm[b * bs:(b + 1) * bs])
-            x = aug(to_gpu_batch(arr[idx], img_size, device))
-            y = y_gpu[torch.as_tensor(idx, device=device)]
-            if rng.random() < mix_prob:
-                x, yt = cutmix_or_mixup(x, y)
-            else:
-                yt = F.one_hot(y, 5).float()
-            yt = yt * (1 - label_smoothing) + label_smoothing / 5
-            x = x.to(memory_format=torch.channels_last)
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                loss = soft_ce(model(x).float(), yt)
             opt.zero_grad(set_to_none=True)
-            loss.backward()
+            for part in np.array_split(idx, accum):          # accum = 1: the whole batch at once, as before
+                x = aug(to_gpu_batch(arr[part], img_size, device))
+                y = y_gpu[torch.as_tensor(part, device=device)]
+                if rng.random() < mix_prob:
+                    x, yt = cutmix_or_mixup(x, y)
+                else:
+                    yt = F.one_hot(y, 5).float()
+                yt = yt * (1 - label_smoothing) + label_smoothing / 5
+                x = x.to(memory_format=torch.channels_last)
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    loss = soft_ce(model(x).float(), yt)
+                (loss / accum).backward()
+                tot += loss.item() * len(part)
             if sam_rho > 0:     # ascend to w + e, take the gradient there, come back to w
                 params = [p for p in model.parameters() if p.grad is not None]
                 with torch.no_grad():
@@ -391,7 +397,6 @@ def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epo
             opt.step()
             sched.step()
             ema.update(model)
-            tot += loss.item() * len(idx)
             n += len(idx)
         if has_val:
             pv = predict_array(ema.module, va_arr, img_size, tta=False)

@@ -1,11 +1,15 @@
-"""Task 4: a logistic probe on frozen foundation features (CLIP ViT-B/16, DINOv2 ViT-B/14, SigLIP 2 ViT-B/16), as a low-weight member.
+"""Task 4: a logistic probe on frozen foundation features (CLIP ViT-B/16, DINOv2 ViT-B/14, SigLIP 2 ViT-B/16, DINOv2 ViT-L/14), as a
+low-weight member.
 
     python scripts/train_task4_probe.py
 
-Pre-trained models are allowed for Task 4. The three backbones stay frozen; only a multinomial logistic regression is trained, on
+Pre-trained models are allowed for Task 4. The four backbones stay frozen; only a multinomial logistic regression is trained, on
 training images. Test images are only passed through the frozen backbones and the fitted probe (inference).
 
-Features: pooled embedding, mean of the image and its horizontal flip, 3 x 768 = 2,304 numbers per image.
+Features: pooled embedding, mean of the image and its horizontal flip, 3 x 768 + 1,024 = 3,328 numbers per image. v19-v26 used the
+first three backbones (2,304 numbers); DINOv2-L was added for v27 (round 37, experiments/claude/gi_r37_t4_probeL.py candidate B:
+with the probe at 10% of the ensemble, HUD hidden +0.0008, real dark / low-contrast frames +0.0002, zoom70 +0.0000, full -0.0000,
+zoom70 / HUD hidden better in 3/5 folds; rule fixed before the run). The v19-v26 probe outputs are in versions/v26_LB0.86147/.
   training images: full frame, 70% centre zoom, HUD hidden (borders greyed)  -> the probe sees every training image three times,
                    so it cannot rely on the HUD alone (round 27: 0.86 on HUD-hidden frames vs 0.59 for a full-frame-only probe)
   test images:     full frame
@@ -13,7 +17,8 @@ Probe: features standardised with the training rows' full-frame mean / SD, L2-re
 Folds = the folds of the fine-tuned members. Writes outputs/preds/t4_probe_fold{f}.npz (val_idx, val_probs, test_probs) and
 t4_probe_full.npz (test_probs), the same layout as scripts/train_task4.py, so the notebook reads it like any other member.
 Feature caches: outputs/preds/t4_feat_<backbone>.npz (train, test) and t4_feat_views_<backbone>.npz (zoom70, centre_grey); they are
-large and not committed; the script recomputes whatever is missing (about 10 minutes per backbone on an 8 GB GPU).
+large and not committed; the script recomputes whatever is missing (about 10 minutes per base backbone on an 8 GB GPU; DINOv2-L about
+25 minutes for these three views).
 """
 import sys
 import time
@@ -30,7 +35,8 @@ from src.config import PRED_DIR  # noqa: E402
 
 BACKBONES = [("vit_base_patch16_clip_224.openai", 224, "basep16_clip_224"),
              ("vit_base_patch14_reg4_dinov2.lvd142m", 224, "basep14_reg4_dinov2"),
-             ("vit_base_patch16_siglip_256.v2_webli", 256, "basep16_siglip_256_256")]
+             ("vit_base_patch16_siglip_256.v2_webli", 256, "basep16_siglip_256_256"),
+             ("vit_large_patch14_reg4_dinov2.lvd142m", 224, "large14_reg4_dinov2")]
 C_PROBE = 0.03
 
 

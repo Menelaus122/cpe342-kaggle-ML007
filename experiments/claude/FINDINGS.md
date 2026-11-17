@@ -2558,3 +2558,231 @@ specialists, Task 3 quantile members (the band recalibration passes the letter o
 30's), Task 4 meta-learners, class multipliers, photometric / entropy-gated TTA and dinov2_r2 (hard-view rule only through the grid
 view; fails the v24 check on four folds), Task 5 k-NN fusion. v26 stays the pipeline state.
 
+## Round 37 (2026-11-17 night): all-in on Task 4 (user brief of ~01:20)
+User decisions: dinov2_r2 fold 4 cancelled; the Task 1 ranking / leaf-embedding run cancelled; **Tasks 1, 2, 3, 5 locked at v26**.
+Round 35-36 work and the v26 record committed (`989d712`). GPU queue (`scratchpad/queue_r37.py`, one job at a time, no heavy CPU job
+beside it): DINOv2-L fold 0 -> views and v23-based scores -> gate -> folds 1-4 + full refit if it passes -> ConvNeXt-Base fold 0.
+
+**Smoke tests** (704 training images, 1 epoch): DINOv2-L at 126x238 with gradient checkpointing peaks at 7.63 GiB at batch 64
+(above the 7.3 GiB limit), 7.16 GiB at batch 32 and 6.94 GiB at batch 64 as 2 x 32 with gradient accumulation (new `--accum` option
+of `scripts/train_task4.py` / `task4.train_fold(accum=...)`: each optimiser step still sees 64 images, same schedule; accum = 1 runs
+exactly as before). Most of the memory is the 300M-parameter model with its AdamW state and EMA copy, not the activations.
+ConvNeXt-Base (`convnext_base.fb_in22k_ft_in1k`, weights downloaded from the timm hub, 338 MB) at 160x320, batch 64: 3.82 GiB.
+DINOv2-L fold 0 gate, fixed before the run: one fixed-weight variant (added at weight 2, 4 or 8, or in place of dinov2_v2) passes
+the hard-view rule and the v24 check on fold 0.
+
+**Queue 3: confidence-adaptive prior exponent** (`gf_r37_t4_adaptive_prior.py`; v23 members' out-of-fold views; alpha = a_lo where
+max p >= t, a_hi elsewhere; base alpha 0.75 everywhere).
+
+| rule | uniform mix: hard-view mean (folds) | full | zoom70 | HUD hidden | gamma | grid | dark frames | training mix: full / zoom70 / HUD / dark | verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| 0.50 if max p >= 0.8, else 0.85 | +0.0008 (5/5) | -0.0003 | -0.0003 | -0.0001 | +0.0009 | +0.0027 | -0.0015 | -0.0009 / -0.0008 / -0.0007 / -0.0031 | fail |
+| ... else 0.90 | +0.0010 (5/5) | -0.0004 | -0.0005 | -0.0001 | +0.0011 | +0.0036 | -0.0016 | -0.0011 / -0.0013 / -0.0012 / -0.0036 | fail |
+| ... else 0.95 | +0.0013 (5/5) | -0.0004 | -0.0006 | -0.0002 | +0.0014 | +0.0046 | -0.0018 | -0.0013 / -0.0017 / -0.0017 / -0.0040 | fail |
+| ... else 1.00 | +0.0014 (5/5) | -0.0004 | -0.0005 | -0.0003 | +0.0016 | +0.0048 | -0.0017 | -0.0014 / -0.0019 / -0.0024 / -0.0041 | fail |
+| control: 1.00 for every image | identical to the row above | | | | | | | | fail |
+| control: 0.50 for every image | -0.0037 (0/5) | -0.0002 | -0.0001 | -0.0002 | -0.0034 | -0.0112 | -0.0012 | +0.0005 / +0.0015 / +0.0017 / +0.0003 | fail |
+| (a_lo, a_hi, t) nested: (0.5, 1.0, 0.7-0.8) | +0.0014 (5/5) | -0.0004 | -0.0005 | -0.0003 | +0.0016 | +0.0048 | -0.0017 | -0.0014 / -0.0019 / -0.0024 / -0.0041 | fail |
+
+* For confident images the exponent does not matter: "0.50 above max p 0.8, 1.00 below" gives exactly the labels of "1.00
+  everywhere" (95% of full frames have max p >= 0.8, and at that confidence no exponent between 0.5 and 1 flips the argmax). The
+  adaptive rule is therefore just a different global alpha, and alpha trades the two class mixes against each other as found in
+  round 23: higher alpha helps the uniform mix on gamma / grid only and costs everything at the training mix; lower alpha the
+  reverse. No rule improves both mixes; alpha 0.75 stays.
+
+**Session end at about 01:50:** the previous Claude Code session ended and its background jobs stopped with it; the DINOv2-L fold-0
+run had finished epoch 0 only (no checkpoint). Not restarted locally: the user moves the DINOv2-L run to Colab
+(`colab/t4_colab_train.ipynb`, built by `scripts/make_colab_bundle.py`; fold 0, the same gate scored on Colab with the bundled v23
+views, then folds 1-4 + full refit only if it passes). The bundle reproduces the laptop's v23-based scores exactly (checked with
+dinov2_r2's views as a stand-in candidate: identical numbers, gate read as fail).
+
+**Is the Task 4 ensemble bigger than it needs to be?** (`gg_r37_t4_ablation.py`; v23 members' out-of-fold views, v17 rule, uniform
+class mix; parameter counts approximate.)
+
+| model / ensemble | params (M) | full | zoom70 | HUD hidden | gamma 3.5 | 75% grid | dark frames | hard-view mean |
+|---|---|---|---|---|---|---|---|---|
+| cnxt alone | 28 | 0.9864 | 0.9524 | 0.9252 | 0.9047 | 0.4864 | 0.9695 | 0.8172 |
+| deit3 alone | 22 | 0.9828 | 0.9562 | 0.9194 | 0.9190 | 0.8007 | 0.9600 | 0.8988 |
+| cnxt_hud alone | 28 | 0.9846 | 0.9631 | 0.9547 | 0.8990 | 0.7925 | 0.9687 | 0.9023 |
+| cnxt22k_hud alone | 28 | 0.9841 | 0.9642 | 0.9543 | 0.9215 | 0.7979 | 0.9635 | 0.9095 |
+| effv2_hud alone | 21 | 0.9816 | 0.9603 | 0.9406 | 0.8964 | 0.4091 | 0.9571 | 0.8016 |
+| deit3_hud alone | 22 | 0.9814 | 0.9622 | 0.9453 | 0.9104 | 0.8407 | 0.9617 | 0.9146 |
+| cnxtS_hud alone | 50 | 0.9861 | 0.9668 | 0.9585 | 0.9019 | 0.8213 | 0.9715 | 0.9121 |
+| dinov2_v2 alone | 86 | 0.9860 | 0.9725 | 0.9539 | 0.9408 | 0.8606 | 0.9676 | 0.9320 |
+| cnxt + dinov2_v2 (equal) | 114 | 0.9896 | 0.9728 | 0.9556 | 0.9376 | 0.8461 | 0.9756 | 0.9280 |
+| cnxt_hud + dinov2_v2 (1 : 2) | 114 | 0.9881 | 0.9754 | 0.9613 | 0.9405 | 0.8727 | 0.9698 | 0.9375 |
+| five HUD members + dinov2_v2 (v23 weights) | 235 | 0.9889 | 0.9762 | 0.9643 | 0.9371 | 0.8901 | 0.9730 | 0.9419 |
+| v23 (eight members) | 285 | 0.9894 | 0.9760 | 0.9643 | 0.9362 | 0.8880 | 0.9746 | 0.9411 |
+| v23 without cnxt | 257 | 0.9890 | 0.9762 | 0.9643 | 0.9367 | 0.8897 | 0.9737 | 0.9417 |
+| v23 without deit3 | 263 | 0.9890 | 0.9760 | 0.9644 | 0.9364 | 0.8878 | 0.9737 | 0.9412 |
+| v23 without cnxt_hud | 257 | 0.9890 | 0.9758 | 0.9639 | 0.9379 | 0.8859 | 0.9735 | 0.9409 |
+| v23 without cnxt22k_hud | 257 | 0.9895 | 0.9763 | 0.9640 | 0.9361 | 0.8855 | 0.9738 | 0.9404 |
+| v23 without effv2_hud | 264 | 0.9893 | 0.9762 | 0.9643 | 0.9378 | 0.8916 | 0.9746 | 0.9425 |
+| v23 without deit3_hud | 263 | 0.9895 | 0.9762 | 0.9644 | 0.9373 | 0.8804 | 0.9746 | 0.9396 |
+| v23 without cnxtS_hud | 235 | 0.9889 | 0.9755 | 0.9628 | 0.9383 | 0.8842 | 0.9727 | 0.9402 |
+| v23 without dinov2_v2 | 199 | 0.9881 | 0.9725 | 0.9629 | 0.9215 | 0.8599 | 0.9719 | 0.9292 |
+
+* A single ConvNeXt-T (28 M parameters) already reaches 0.9864 on full frames; the eight-member v23 (about 285 M) 0.9894. Two
+  models (ConvNeXt-T + DINOv2-B) match v23 on full frames (0.9896) and on the real dark frames (0.9756 vs 0.9746).
+* Leaving out any one CNN member changes the hard-view mean by at most 0.0015 (without effv2_hud it even rises, +0.0014; selected
+  from eight leave-one-outs, so not a candidate). Only DINOv2 carries weight: without it the hard-view mean drops 0.012 (gamma
+  -0.015, grid -0.028).
+* The leaderboard history agrees: the large Task 4 gains came from the decision rule (v17, about +0.024 on Task 4) and from the
+  self-supervised DINOv2 backbone (v20, about +0.016, eight times what the training-image proxies predicted); adding CNNs of the
+  same kind (v16 ConvNeXt-S +0.0002) or another ViT (v21 EVA02-B -0.0005) did not move it. The remaining gap between the training
+  out-of-fold score (0.989) and the test score implied by the leaderboard (about 0.93) is a train / test shift that model capacity
+  on training-like frames does not close.
+
+**Why is Task 4 lower on the test images than out of fold? (scoping without test-image analysis, user rule of 2026-11-17)**
+Sources allowed: training images, the data card / instruction slides, and the public scores of files already uploaded.
+* What the slides and data card say: screenshots from live streams, player submissions, forums and support tickets; "different
+  maps, phases, weather, UI states"; 144p centre-cropped to 230x120. The leaderboard is a *weighted* mean of the five task scores
+  (slide 26: (w1 S1 + ... + w5 S5) / sum w), weights not published, so the test level of Task 4 cannot be pinned down; with equal
+  weights the history implies about 0.91-0.93 against 0.989 out of fold.
+* Ruled out on training data: near-duplicate leakage inflating the out-of-fold score (round 18-19: no twins; fine-tuned models
+  hardly drop on held-out clusters), metadata artefacts (one batch re-encode, random names and order).
+* What the leaderboard responded to (Task-4-only uploads; Task 4 deltas assume equal weights):
+  - class-prior correction (v17, alpha 0.75): +0.0047 public, about +0.024 on Task 4, from 949 changed labels, i.e. roughly four of
+    five changed labels were corrections: the test class mix is far from training's (39% 7-Eleven Knights), and ambiguous test
+    frames had defaulted to the largest class (label shift);
+  - HUD-independent members (v15, HUD dropout): +0.0016 public, about +0.008, and a self-supervised backbone (v20, DINOv2-B):
+    +0.0033 public, about +0.016, eight times what the training-image proxies predicted (covariate shift in content / UI state
+    that the HUD-reading shortcut does not survive and that DINOv2 features tolerate);
+  - more of the same (v16 ConvNeXt-S +0.00003, v21 EVA02-B -0.00009, v23 re-weighting +0.00007): nothing.
+* So the gap is train / test shift (label shift + a content / UI-state shift), not capacity on training-like frames (the ablation
+  above: a 28 M-parameter ConvNeXt-T already reaches 0.986 out of fold). The synthetic hard views capture only part of it, which
+  is why they under-predicted v20.
+* Excluded by the rules: anything that reads the test images or their statistics to adapt (EM prior re-estimation on test
+  predictions, Saerens et al. 2002; test-time entropy minimisation, TENT; pseudo-labels; test-based EDA or validation design).
+* Practical options ranked by cost (no Colab compute needed for the first three):
+  1. WiSE-FT for the DINOv2 member (Wortsman et al., CVPR 2022): interpolate each fold's fine-tuned backbone with the pretrained
+     DINOv2 weights (alpha 0.5 / 0.7 / 0.85, fine-tuned head kept); known to recover robustness lost in fine-tuning at no training
+     cost; GPU inference only (about 1-1.5 h on the laptop for the five views of all folds);
+  2. a linear probe on frozen DINOv2-L features (fine-tuning distorts pretrained features under shift, linear probes do not;
+     Kumar et al., ICLR 2022): forward passes only (minutes), replaces or joins the existing 10% probe;
+  3. a second DINOv2-B with the LP-FT recipe (probe the head first, then fine-tune; Kumar et al. 2022): about 6 h on the laptop;
+  4. DINOv2-L fine-tuning (Colab): the most expensive and the least supported by the evidence above; only if 1-2 show that more
+     DINOv2-like robustness helps on the proxies.
+
+**Option 1, WiSE-FT for the DINOv2 member** (`gh_r37_t4_wiseft.py`; user go-ahead 2026-11-17 ~02:05; each fold's fine-tuned
+dinov2_v2 interpolated with the pretrained weights at the same 126x238 grid, fine-tuned head kept; 35 GPU minutes, inference only).
+
+| alpha | member alone: full / zoom70 / HUD hidden / gamma / grid / dark frames | in v23 at weight 8: hard-view mean (folds) | full | zoom70 | HUD hidden | gamma | grid | dark frames | verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| 1.00 (v23) | 0.9860 / 0.9725 / 0.9539 / 0.9408 / 0.8606 / 0.9676 | | | | | | | | |
+| 0.95 | 0.9858 / 0.9730 / 0.9537 / 0.9440 / 0.8583 / 0.9667 | -0.0001 (3/5) | -0.0001 | -0.0001 | -0.0001 | +0.0010 | -0.0011 | +0.0000 | fail |
+| 0.85 | 0.9850 / 0.9723 / 0.9518 / 0.9487 / 0.8501 / 0.9647 | -0.0005 (1/5) | -0.0005 | -0.0005 | +0.0001 | +0.0027 | -0.0044 | -0.0014 | fail |
+| 0.70 | 0.9828 / 0.9681 / 0.9450 / 0.9499 / 0.8256 / 0.9593 | -0.0027 (0/5) | -0.0009 | -0.0011 | +0.0004 | +0.0029 | -0.0130 | -0.0018 | fail |
+| 0.50 | 0.9720 / 0.9490 / 0.9168 / 0.9365 / 0.7409 / 0.9407 | -0.0084 (0/5) | -0.0009 | -0.0026 | -0.0007 | -0.0023 | -0.0280 | -0.0017 | fail |
+| nested | alpha 1.00 picked in all five folds | +0.0000 | | | | | | | fail |
+
+* Moving towards the pretrained weights helps only the synthetic gamma 3.5 view and costs everything else, the real dark /
+  low-contrast frames included; the training folds keep the fine-tuned model in every fold. Caveat: this is the variant with the
+  fine-tuned head kept (the pretrained DINOv2 has no classifier); the original WiSE-FT also interpolates the head with a zero-shot
+  (or linear-probe) head, which needs a probe on frozen features (option 2's computation). Not adopted.
+
+**Task 2 learning curve** (`gj_r37_t2_learning_curve.py`; user request after a competitor reported a higher Task 2 score without
+naive Bayes; training rows of each pipeline fold subsampled, stratified; scored on the full held-out folds; argmax, no multipliers).
+
+| training rows per fold | LightGBM macro-F1 / log-loss | KDE NB macro-F1 / log-loss | 0.4 / 0.6 blend macro-F1 / log-loss |
+|---|---|---|---|
+| 10,400 (12.5%) | 0.7459 / 0.6317 | 0.7486 / 0.6407 | 0.7508 / 0.6166 |
+| 20,800 (25%) | 0.7494 / 0.6214 | 0.7512 / 0.6326 | 0.7537 / 0.6107 |
+| 41,600 (50%) | 0.7541 / 0.6128 | 0.7549 / 0.6278 | 0.7554 / 0.6066 |
+| 62,400 (75%) | 0.7556 / 0.6086 | 0.7562 / 0.6263 | 0.7571 / 0.6050 |
+| 83,200 (100%) | 0.7559 / 0.6070 | 0.7560 / 0.6251 | 0.7571 / 0.6044 |
+
+* The curve is flat at the end: the last third of the rows adds +0.0003 (LightGBM), -0.0002 (naive Bayes), 0.0000 (blend) macro-F1
+  and 0.0006 log-loss to the blend. Power-law fits put twice the rows at +0.0011 to +0.0023 and the unlimited-data asymptote at
+  0.762-0.769 (fits on five points, an upper bound). Even unlimited rows from the same generator stay near 0.76-0.77: the rest is
+  label noise, as the round-18 calibration check found.
+* So a cross-validated Task 2 macro-F1 clearly above about 0.765 cannot come from a better learner or more data; it would point to
+  a different metric (our accuracy is 0.770, weighted-F1 0.769), a single favourable hold-out (our folds range 0.7536-0.7593),
+  in-sample tuning of the decision rule, or information outside the training rows.
+
+**Task 3, last round: the "spent nothing this month" error and an age-stratified blend** (`gk_r37_t3_churn.py`; user brief of
+2026-11-17 ~03:05, about 30 CPU minutes; reference = the pipeline rebuilt fully nested, 0.79457). Rows predicted to spend that
+spent 0 carry 32.9% of the absolute error, 32.7% of it in segments 1-3.
+
+| candidate | nested NMAE | delta | folds better | per fold | verdict |
+|---|---|---|---|---|---|
+| 1a stage-1 specialist on segment >= 1 rows (slowdown ratios: prev month vs history per 30 days of age, recent vs lifetime daily spend, vip x purchase frequency, premium x days since purchase; 3 seeds) | 0.79456 | -0.00002 | 0/5 | -0.00005 -0.00000 -0.00000 -0.00002 -0.00001 | fail |
+| 1b mean log-odds of the specialist and the pipeline on segment >= 1 | 0.79457 | -0.00001 | 2/5 | -0.00003 +0.00000 -0.00002 -0.00000 +0.00000 | fail |
+| 2 exact L1 blend per account-age half (missing ages with the older half), shrunk 0.5 to the global weights | 0.79456 | -0.00001 | 2/5 | +0.00000 -0.00001 +0.00000 -0.00003 -0.00001 | fail |
+
+* The specialist ranks the segment 1-3 rows exactly as the pipeline's stage 1 does (AUC 0.7410 vs 0.7412; within segments 1 / 2 /
+  3: 0.632 / 0.604 / 0.597 vs 0.633 / 0.605 / 0.598; log-loss 0.5407 vs 0.5404): the slowdown ratios carry nothing the trees did
+  not already build from the same columns, and whether a spender skips a month stays close to unpredictable. (Item 2 first crashed
+  on the missing account ages, which made both halves empty; rerun with the missing ages in the older half.)
+* **Task 3 locked at v26 (user decision of 2026-11-17).**
+
+**Task 1 learning curve and calibration** (`gl_r37_t1_learning_curve.py`; LightGBM with the pipeline's parameters on the 49
+features, labelled training rows of each pipeline fold subsampled, scored on the full held-out folds; F2 with the pipeline's
+cut-off rule).
+
+| training rows per fold | AUC | log-loss | F2 |
+|---|---|---|---|
+| 9,082 (12.5%) | 0.87093 | 0.40327 | 0.82156 |
+| 18,163 (25%) | 0.88300 | 0.38195 | 0.82967 |
+| 36,326 (50%) | 0.88682 | 0.37394 | 0.83366 |
+| 54,490 (75%) | 0.88827 | 0.36984 | 0.83520 |
+| 72,653 (100%) | 0.88947 | 0.36806 | 0.83492 |
+
+* Flat at the end: the last quarter of the rows adds +0.0012 AUC and no F2 (-0.0003, inside the fold noise); power-law fits put
+  twice the rows at +0.0007 AUC / +0.0008 F2 and the asymptotes at AUC 0.890 / F2 0.837 for this learner.
+* The pipeline's level 2 is calibrated (expected calibration error 0.0032; deciles of p match the observed cheater rates within
+  0.011). If its probabilities were the truth, the best achievable F2 would be 0.8383; the observed best single-cut F2 is 0.8388.
+  The remaining errors are exactly the uncertainty the model reports: 56% of the rows sit at 0.1 < p < 0.9, where cheaters and
+  legitimate players overlap in every feature; the confident ends are nearly pure (p >= 0.95: 99.8% cheaters; p <= 0.05: 0.16%).
+* **Task 1 locked at v26 (user decision of 2026-11-17).** Tasks 1, 2, 3 and 5 are now at the limits the training data allow.
+
+**Option 2, logistic probe on frozen DINOv2-L features** (`gi_r37_t4_probeL.py`; user go-ahead 2026-11-17 ~02:48; frozen
+vit_large_patch14_reg4_dinov2.lvd142m at 224 x 224, pooled 1,024-d, image + h-flip; feature extraction on the laptop GPU took 53
+minutes (training images under five views, then test images, cached as outputs/preds/t4_feat[_views]_large14_reg4_dinov2.npz); the
+existing probe's recipe: C 0.03, fitted on the full / zoom70 / HUD-hidden features, out of fold on the members' folds. The first run
+crashed after the extraction (the two extra views clashed with the existing probe's loader); rescored from the caches.)
+
+| probe alone (v17 rule) | full | zoom70 | HUD hidden | dark frames |
+|---|---|---|---|---|
+| existing (CLIP + DINOv2-B + SigLIP 2, 2,304-d) | 0.9240 | 0.8917 | 0.8596 | 0.8578 |
+| DINOv2-L (1,024-d) | 0.9084 | 0.8684 | 0.8342 | 0.8335 |
+| existing + DINOv2-L (3,328-d) | **0.9369** | **0.9030** | **0.8788** | **0.8766** |
+
+| in the final average (0.9 x v23 members + 0.1 x probe) vs the existing probe | full | zoom70 | HUD hidden | dark frames | zoom / HUD folds better | verdict |
+|---|---|---|---|---|---|---|
+| A probe-L instead of the existing probe | -0.0002 | -0.0003 | -0.0001 | +0.0008 | 0/5 | fail |
+| **B probe on existing + DINOv2-L features** | **-0.0000** | **+0.0000** | **+0.0008** | **+0.0002** | 3/5 | **passes the rule set before the run** |
+| C probe-L, weight nested in {0.1, 0.2, 0.3} (0.2 in four folds) | -0.0002 | -0.0003 | -0.0009 | +0.0004 | 0/5 | fail |
+
+* Frozen DINOv2-L at 224 x 224 alone is weaker than the three base-size backbones together, but it adds to them: the combined probe
+  gains +0.013 on full frames, +0.011 zoomed, +0.019 HUD hidden and +0.019 on the real dark frames over the existing probe alone.
+* At its 10% share the effect on the ensemble is small (zoom70 positive only in the fifth decimal; dark frames by fold +0.0028 -0.0006
+  -0.0016 -0.0002 +0.0006). It passes the rule fixed before the run, at a size the public split cannot resolve. Members + probe-L on
+  the synthetic views: gamma 3.5 +0.0029, 75% grid -0.0070 (against members only; the existing probe has no such views).
+* No training is needed to use it: adding the DINOv2-L backbone to `scripts/train_task4_probe.py` reuses the cached features (test
+  features included) and rewrites the probe files in the same layout; candidate B is exactly that probe.
+
+
+### v27 prepared (user decision, 2026-11-17 ~07:30: v26 + the probe of candidate B; not uploaded yet)
+
+* `scripts/train_task4_probe.py`: DINOv2-L (vit_large_patch14_reg4_dinov2.lvd142m, 224 x 224) added as a fourth frozen backbone; the
+  cached features of `gi_r37_t4_probeL.py` were reused (no GPU work), the probe refitted on the CPU in about 3 minutes
+  (`outputs/r37/v27_probe_refit.log`). The v19-v26 probe files are kept in `outputs/preds/probe_v19_v26/` and in
+  `versions/v26_LB0.86147/`. The refitted probe reproduces candidate B exactly: out of fold 0.9240 -> 0.9369 (balanced macro-F1,
+  v17 rule), accuracy 0.9326 -> 0.9427, folds 0.940-0.945.
+* `task4/task4.ipynb` rebuilt (only the probe's description changed) and executed (71 s): probe alone 0.9232 -> 0.9353 (macro-F1 at
+  argmax), ensemble + 10% probe 0.9896 -> 0.9895, the v17 rule 0.9884 -> 0.9883 at the training mix and 0.9892 -> 0.9892 at a
+  balanced mix; as in the experiment, the change is on the hard views (HUD hidden +0.0008, dark frames +0.0002), not on full frames.
+* `submission_v27.csv` (`scripts/make_submission.py --out submission_v27.csv`; sha256 fe7794e4...748f0c): **184 of 25,889 Task 4
+  labels change** (0.71%); Tasks 1, 2, 3, 5 identical to v26. `submission.csv` stays v26 until an upload.
+  Predicted class shares on the test images, v26 -> v27 (reported only; no test statistic chooses anything): 7-11k 0.1425 -> 0.1416
+  (-22), fiveN 0.2718 -> 0.2721 (+8), freefried 0.1438 -> 0.1433 (-12), pube 0.2441 -> 0.2446 (+13), roblock 0.1978 -> 0.1983
+  (+13). The 184 moves are spread over every pair of classes (largest: fiveN -> roblock 24, roblock -> fiveN 19, freefried ->
+  fiveN 17, 7-11k -> roblock 16): borderline frames that the 10% probe tips, not a shift towards one class.
+* Expectation stated before any upload (as for v26): the nested gain is a few ten-thousandths on the hard views and zero on full
+  frames, below what the public split resolves for 184 changed labels; v27 is kept on the nested evidence whatever its public
+  score (user, 2026-11-17).
+* **Uploaded 2026-11-17 08:25 (user's approval; Kaggle CLI, ref 58451173): public 0.86177**, +0.00030 over v26 (0.86147) and +0.00029
+  over v25 (0.86148): the best public score so far (top of the LB 0.86750). The size is at the edge of the public split's noise for
+  184 changed labels, so it neither confirms nor refutes the nested gain; v27 is kept on the nested evidence, as agreed before the
+  upload. Snapshot `versions/v27_LB0.86177/`, `submission.csv` = v27.
