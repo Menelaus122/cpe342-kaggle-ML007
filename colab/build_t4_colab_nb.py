@@ -6,12 +6,17 @@ md = lambda s: nb.cells.append(nbf.v4.new_markdown_cell(s.strip("\n")))
 code = lambda s: nb.cells.append(nbf.v4.new_code_cell(s.strip("\n")))
 
 md(r"""
-# CPE342 Task 4: GPU training on Colab (round 39 step 3: DINOv2-L with HUD dropout 0.70; fold 0 + gate, then folds 1-4 + full refit)
+# CPE342 Task 4: GPU training on Colab (round 40 step 3: a second seed of the v30 DINOv2-L member; all folds + full refit)
 
 Runs the same trainer as the laptop (`scripts/train_task4.py`, identical folds) on a bigger GPU. Training images only; no test
 image or test statistic enters any decision (the full refit only *predicts* the test images, as on the laptop).
 
-**Recipe (user brief of 2026-11-17 evening, round 39 step 3; `LP_FT = False`):** DINOv2 ViT-L/14 at 126×238, plain fine-tuning (the
+**Round 40 step 3 (user brief of 2026-11-18):** the same recipe as v30's member `dinov2L_hud70` with other training seeds
+(`--train-seed-offset 1000`; the folds are unchanged), tag `dinov2L_hud70_s2`. It is a replicate of a recipe that already passed, so
+`GATE = False`: all five folds and the full refit run, and the decision is made on the laptop against v30
+(`experiments/claude/gx_r40_t4_dinov2L_seed2_eval.py`, written before the run). About 3 h on an A100.
+
+**Round 39 step 3 recipe (user brief of 2026-11-17 evening; `LP_FT = False`):** DINOv2 ViT-L/14 at 126×238, plain fine-tuning (the
 head starts from scratch, as every laptop member), **lr 3e-5**, layer-wise lr decay 0.85, 2 warm-up + 13 cosine epochs, **HUD dropout
 0.70** (round 38's LP-FT run lost on HUD-hidden frames; a stronger HUD dropout targets exactly that), batch 64, tag `dinov2L_hud70`.
 No WiSE-FT (`ALPHAS = []`): without an LP head θ0 would carry a random head.
@@ -44,6 +49,9 @@ the **v24 check: zoom70, HUD hidden and the real dark / low-contrast frames all 
 rule is printed but no longer required). Otherwise the notebook stops. Round 38 (LP-FT) required the hard-view rule as well and also
 scored the WiSE-FT points. After all folds the member is judged on the laptop against v29 (members + 35% probe) under the usual rule.
 
+**Auto-disconnect (`AUTO_DISCONNECT = True`):** the last cell ends the runtime 60 s after the run, and an error in any cell does the
+same after printing it, so no compute units are spent on an idle runtime overnight; all outputs and logs are already on Drive.
+
 **When it is done:** copy from `MyDrive/cpe342-colab/out/` to the laptop repo (the last cell lists the files):
 `preds/t4_<TAG>*.npz` → `outputs/preds/`; `r30_views/<TAG>*.npz` → `experiments/claude/outputs/r30_views/`;
 `logs/*<TAG>*` → `outputs/logs/`; the feature caches `preds/t4_feat_views_<tag>.npz` and `preds/t4_feat_<tag>.npz` of the
@@ -55,12 +63,14 @@ code(r"""
 # ---- settings -------------------------------------------------------------------------------------------------------------
 EXTRACT = []                  # frozen-feature caches made here first ([] = skip); round 39 step 2 used ["vitH14_clip_laion2b_224", "swinL_in22k_224"]
 TRAIN = True                  # False: only the feature cell runs; True: benchmark + training as below
-TAG = "dinov2L_hud70"         # round 39 step 3 (round 38: "dinov2L_lpft")
+TAG = "dinov2L_hud70_s2"      # round 40 step 3 (round 39: "dinov2L_hud70"; round 38: "dinov2L_lpft")
 LP_FT = False                 # round 38: True (LP head first, then fine-tuning from it, plus WiSE-FT points)
 LR, P_HUD = "3e-5", "0.70"    # round 38: 2e-5, 0.5
 GATE_NEEDS = ["v24 check (beyond the grid) PASS"]   # round 38 also needed "hard-view rule PASS"
 FOLDS = [0, 1, 2, 3, 4]       # fold 0 first; folds 1-4 only if fold 0 passes the gate
-GATE = True                   # False: train every fold without the fold-0 gate
+GATE = False                  # False: train every fold without the fold-0 gate (round 40: a seed replicate, judged on the laptop)
+SEED_OFFSET = 1000            # added to the training seeds only (round 39's member: 0)
+AUTO_DISCONNECT = True        # end the runtime when the run is done or a cell fails: no compute units spent idle (outputs are on Drive)
 DO_FULL = True                # full Train+Val refit -> test predictions (the member's test input)
 DRIVE_DIR = "/content/drive/MyDrive/cpe342-colab"   # the team's Drive folder
 MODELS_ON_DRIVE = True        # 1.2 GB per checkpoint (about 6 GB in all); False keeps them on the Colab disk (lost with the session)
@@ -70,8 +80,24 @@ ALPHAS = [0.0, 0.5, 0.7, 0.85] if LP_FT else []    # WiSE-FT points (alpha = 1 i
 MEMBER_ALPHAS = [0.5, 0.7, 0.85] if LP_FT else []  # after all folds: member files (val + test probabilities) for these alphas
 MODEL = "vit_large_patch14_reg4_dinov2.lvd142m"
 RECIPE = ["--model", MODEL, "--h", "126", "--w", "238", "--bs", "64", "--accum", str(ACCUM), *(["--lp-ft"] if LP_FT else []),
-          "--lr", LR, "--layer-decay", "0.85", "--warmup-epochs", "2", "--epochs", "15", "--p-hud", P_HUD]
+          "--lr", LR, "--layer-decay", "0.85", "--warmup-epochs", "2", "--epochs", "15", "--p-hud", P_HUD,
+          "--train-seed-offset", str(SEED_OFFSET)]
 print("recipe:", " ".join(RECIPE))
+
+# on an error in any later cell: show it, wait 60 s, then end the runtime (Ctrl+M I / "Interrupt" is not an error and keeps it)
+try:
+    _ip = get_ipython()
+except NameError:
+    _ip = None
+if AUTO_DISCONNECT and _ip is not None:
+    def _end_runtime_on_error(shell, etype, evalue, tb, tb_offset=None):
+        shell.showtraceback((etype, evalue, tb), tb_offset=tb_offset)
+        import time as _t
+        print(f"\nerror -> ending the runtime in 60 s [{_t.strftime('%H:%M')} UTC]; the logs are in {DRIVE_DIR}/out/logs", flush=True)
+        _t.sleep(60)
+        from google.colab import runtime
+        runtime.unassign()
+    _ip.set_custom_exc((Exception,), _end_runtime_on_error)
 """)
 
 code(r"""
@@ -260,6 +286,16 @@ for sub in ("preds", "r30_views", "logs"):
 for tag in EXTRACT:
     for f in sorted((D / "out" / "preds").glob(f"t4_feat*_{tag}.npz")):
         print(f"{f}  {f.stat().st_size / 1e6:.1f} MB")
+""")
+
+code(r"""
+# ---- end the runtime (stops compute-unit use; every output is already on Drive) ------------------------------------------------
+if AUTO_DISCONNECT:
+    import time
+    print(f"done -> ending the runtime in 60 s [{time.strftime('%H:%M')} UTC] (set AUTO_DISCONNECT = False to keep it)", flush=True)
+    time.sleep(60)
+    from google.colab import runtime
+    runtime.unassign()
 """)
 
 # the benchmark and training cells run only with TRAIN = True

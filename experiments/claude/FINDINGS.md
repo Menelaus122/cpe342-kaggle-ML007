@@ -3036,3 +3036,32 @@ Expectation stated before any upload: at the OOF margin about +0.0006 public; at
   the stronger, HUD-robust member matters more. Best public score so far. `submission.csv` = v30, snapshot `versions/v30_LB0.86322/`
   (preds pruned to the git-tracked files, which now include the DINOv2-L member and `t4_gate_stats.npz`), README rows.
   Note: Kaggle's daily quota resets at 00:00 UTC = 07:00 Thai time (v29 at 20:52 and v30 at 01:20 fell on the same UTC day).
+
+## Round 40 (2026-11-18 night): user brief after v30 = 0.86322
+
+**Step 1, smooth gate and older-member weights: FAIL** (`gv_r40_t4_gate_weights.py`, CPU, caches of round 39; rule fixed before the
+run). Reference v30 (per-fold thresholds): full 0.9910, zoom70 0.9794, HUD hidden 0.9676, dark 0.9805. Smooth ramps of the DINOv2-L
+weight (2 -> 8 between quantile ranks lo and hi of min(brightness rank, contrast rank)): (0.05, 0.25) full +0.0001, zoom70 -0.0001,
+HUD -0.0000, dark +0.0004; (0.05, 0.15) +0.0001 / -0.0001 / +0.0000 / +0.0004; (0.10, 0.25) +0.0001 / -0.0001 / -0.0002 / +0.0000.
+Older members (plain, HUD) at (0, 3): -0.0002 / -0.0001 / +0.0001 / -0.0010; (1, 2): +0.0003 / +0.0003 / -0.0003 / +0.0003; (0, 2):
+-0.0000 / +0.0004 / -0.0000 / -0.0014. No setting meets the rule even in-sample; N keeps v30 in every fold. The hard gate at 10% is
+as good as a ramp, and the plain ConvNeXt-T / DeiT-III-S members carry dark-frame information (removing them costs -0.0010).
+
+**Step 2, low-light + RGB channel shuffle on ConvNeXt-T with HUD dropout, fold 0: FAIL** (`gw_r40_t4_lowlight_eval.py`, written
+while the model trained; new trainer options `--p-lowlight` (brightness x0.05-0.30 or gamma 2-4, then Gaussian noise sd 0.05-0.15) and
+`--p-chshuffle` (random non-identity RGB order) in `src/task4.py` / `scripts/train_task4.py`, off by default and drawing no random
+numbers when off, so the existing recipes are unchanged (checked); `cnxt_hud_lowlight`, p 0.15 / 0.30, 10 epochs, laptop GPU 20 min;
+fold-0 TTA macro-F1 0.9834). Alone against cnxt_hud on fold 0 (balanced mix): full 0.9831 (-0.0016), zoom70 0.9610 (-0.0017), HUD
+hidden 0.9529 (-0.0028), **real dark / low-contrast frames 0.9728 (-0.0050)**; only the synthetic views gain (gamma 3.5 +0.0237, now in
+distribution; 75% grid +0.0048). In v30 in place of cnxt_hud: full +0.0002, zoom70 -0.0006, HUD +0.0012, dark -0.0006. Synthetic
+darkening with heavy noise does not look like the real dark frames, and channel shuffles discard colour, which carries class
+information (the greyscale TTA of round 39 showed the same). Step 3 therefore uses v30's recipe unchanged.
+
+**Step 3 prepared for Colab:** `--train-seed-offset` in `scripts/train_task4.py` (training seeds only; folds keep SEED), tag
+`dinov2L_hud70_s2` (offset 1000), `colab/t4_colab_train.ipynb` with GATE = False (a replicate of a recipe that passed; about 3 h on an
+A100), bundle `colab/upload/cpe342_code.zip` rebuilt (35,108,929 bytes). Decision on the laptop by `gx_r40_t4_dinov2L_seed2_eval.py`
+(written before the run): the mean of the two seeds as the DINOv2-L member, same gate and weights, against v30 under the user's rule.
+* Colab notebook: `AUTO_DISCONNECT = True` ends the runtime (`google.colab.runtime.unassign()`) 60 s after the last cell, and an
+  error in any cell does the same after printing it (IPython `set_custom_exc`; an interrupt is not an error), so no compute units
+  are spent idle. Checked locally with a fake `google.colab` module. Estimated cost of the seed-2 run: about 3.2 h on an A100,
+  about 35-40 compute units (rate from memory, about 11-13 per hour; the Colab Resources panel shows the current rate).

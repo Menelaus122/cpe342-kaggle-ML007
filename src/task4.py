@@ -84,7 +84,7 @@ class GPUAugment:
     def __init__(self, p_affine=0.6, max_rot=25, scale=(0.85, 1.15), max_shift=0.08, max_shear=8,
                  randaug_chunk=8, p_jitter=0.5, p_invert=0.15, p_gray=0.05, p_noise=0.4,
                  max_noise=0.10, p_blur=0.2, p_erase=0.2, p_hud=0.0, hud_zoom=(0.60, 0.75),
-                 p_grid=0.0, grid_cover=(0.65, 0.85), jitter_gain=1.0):
+                 p_grid=0.0, grid_cover=(0.65, 0.85), jitter_gain=1.0, p_lowlight=0.0, p_chshuffle=0.0):
         self.__dict__.update(locals())
         del self.__dict__["self"]
         self.randaug = v2.RandAugment(num_ops=2, magnitude=9)
@@ -205,11 +205,22 @@ class GPUAugment:
         x = self._affine(x)
         x = self._randaugment(x)
         x = self._jitter(x)
+        if self.p_chshuffle > 0:                                        # round 40: random RGB channel order (never the identity)
+            perms = torch.tensor([[0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]], device=dev)
+            pick = perms[torch.randint(0, 5, (B,), device=dev)]
+            shuffled = torch.gather(x, 1, pick[:, :, None, None].expand_as(x))
+            x = torch.where(self._bern(self.p_chshuffle, B, dev)[:, None, None, None], shuffled, x)
         inv = self._bern(self.p_invert, B, dev)[:, None, None, None]
         x = torch.where(inv, 1 - x, x)
         g = self._bern(self.p_gray, B, dev)[:, None, None, None]
         gray = (0.299 * x[:, 0] + 0.587 * x[:, 1] + 0.114 * x[:, 2]).unsqueeze(1).expand_as(x)
         x = torch.where(g, gray, x)
+        if self.p_lowlight > 0:                                         # round 40: near-black frame with heavy sensor noise
+            on = self._bern(self.p_lowlight, B, dev)[:, None, None, None]
+            u = lambda lo, hi: (lo + torch.rand(B, device=dev) * (hi - lo))[:, None, None, None]
+            dim = torch.where(self._bern(0.5, B, dev)[:, None, None, None], x * u(0.05, 0.30), x.clamp_min(1e-6) ** u(2.0, 4.0))
+            dim = (dim + torch.randn_like(x) * u(0.05, 0.15)).clamp(0, 1)
+            x = torch.where(on, dim, x)
         nz = self._bern(self.p_noise, B, dev)[:, None, None, None]
         sig = (torch.rand(B, device=dev) * self.max_noise)[:, None, None, None]
         x = torch.where(nz, (x + torch.randn_like(x) * sig).clamp(0, 1), x)
