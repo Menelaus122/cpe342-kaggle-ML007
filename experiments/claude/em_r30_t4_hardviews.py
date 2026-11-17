@@ -37,10 +37,12 @@ ARCH = {"cnxt": ("convnext_tiny.in12k_ft_in1k", (160, 320)), "deit3": ("deit3_sm
         "cnxt_mix": ("convnext_tiny.in12k_ft_in1k", (160, 320)),
         "dinov2L": ("vit_large_patch14_reg4_dinov2.lvd142m", (126, 238)),
         "dinov2_photo": ("vit_base_patch14_reg4_dinov2.lvd142m", (126, 238)),
-        "cnxtB_hud": ("convnext_base.fb_in22k_ft_in1k", (160, 320))}
+        "cnxtB_hud": ("convnext_base.fb_in22k_ft_in1k", (160, 320)),
+        "dinov2L_lpft": ("vit_large_patch14_reg4_dinov2.lvd142m", (126, 238)),  # round 38: LP-FT (Colab)
+        "dinov2L_hud70": ("vit_large_patch14_reg4_dinov2.lvd142m", (126, 238))}  # round 39 step 3: HUD dropout 0.70, lr 3e-5 (Colab)
 V20 = ["cnxt", "deit3", "cnxt_hud", "cnxt22k_hud", "effv2_hud", "deit3_hud", "cnxtS_hud", "dinov2_v2"]
 MEMBER_W = {"dinov2_v2": 3.0}
-REPLACES = {"dinov2_r2": "dinov2_v2", "dinov2_sam": "dinov2_v2", "dinov2_photo": "dinov2_v2", "dinov2L": "dinov2_v2"}
+REPLACES = {"dinov2_r2": "dinov2_v2", "dinov2_sam": "dinov2_v2", "dinov2_photo": "dinov2_v2", "dinov2L": "dinov2_v2", "dinov2L_lpft": "dinov2_v2", "dinov2L_hud70": "dinov2_v2"}
 CANDS = sys.argv[1:]
 V19, V30 = Path("experiments/claude/outputs/r19_views"), Path("experiments/claude/outputs/r30_views")
 V30.mkdir(parents=True, exist_ok=True)

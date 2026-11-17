@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import torch
 from sklearn.metrics import f1_score
 from sklearn.model_selection import StratifiedKFold
 
@@ -48,6 +49,10 @@ def main():
     ap.add_argument("--sam-rho", type=float, default=0.0, help="round 30: sharpness-aware minimisation radius (0 = off; 0.05 = Foret et al.)")
     ap.add_argument("--mixstyle", type=int, default=0, help="round 30: MixStyle after the first n stages of a CNN (0 = off)")
     ap.add_argument("--accum", type=int, default=1, help="round 37: gradient accumulation steps (each step still sees --bs images)")
+    ap.add_argument("--lp-ft", action="store_true",
+                    help="round 38: LP-FT, start fine-tuning from a logistic probe head fitted on the frozen pretrained features of the "
+                         "fold's training images (saved as models/t4_<tag>_<fold>_lphead.pt; the WiSE-FT start point)")
+    ap.add_argument("--lp-c", type=float, default=0.03, help="LP-FT: inverse L2 strength of the probe head (the frozen probe's C)")
     args = ap.parse_args()
     aug_kw = {**({"scale": tuple(args.aug_scale)} if args.aug_scale else {}), **({"p_hud": args.p_hud} if args.p_hud else {}),
               **({"p_grid": args.p_grid} if args.p_grid else {}), **({"p_gray": args.p_gray} if args.p_gray is not None else {}),
@@ -71,17 +76,38 @@ def main():
     arr = task4.load_uint8(list(train.path))
     log(f"decoded {arr.shape} uint8 ({arr.nbytes / 1e9:.2f} GB) in {time.time() - t0:.0f}s")
     size = (args.h, args.w)
+
+    def lp_head(rows, name, va=None):
+        """LP-FT: the probe head for these training rows (cached); with va, also the probe's own validation score (theta_0)."""
+        if not args.lp_ft:
+            return None
+        path = MODEL_DIR / f"t4_{args.tag}_{name}_lphead.pt"
+        if path.exists():
+            return torch.load(path)
+        t1 = time.time()
+        m = task4.create_model(args.model, img_size=size).cuda().to(memory_format=torch.channels_last)
+        head = task4.fit_lp_head(m, arr, y, rows, size, C=args.lp_c)
+        torch.save(head, path)
+        msg = f"{name}: LP head fitted on {len(rows)} images x 3 views (C {args.lp_c}) in {time.time() - t1:.0f}s"
+        if va is not None and len(va):
+            vp = task4.predict_array(task4.set_head(m, head), arr[va], size, tta=True)
+            msg += f"; pretrained backbone + LP head (theta_0) val macro-F1 {f1_score(y[va], vp.argmax(1), average='macro'):.4f}"
+        log(msg)
+        del m
+        torch.cuda.empty_cache()
+        return head
     if args.full:
         out_path = PRED_DIR / f"t4_{args.tag}_full.npz"
         if out_path.exists():
             log("full refit: cached, skipping")
             return
         log(f"full refit on all {len(y)} training images (same recipe, no hold-out)")
+        init_head = lp_head(np.arange(len(y)), "full")
         model, hist = task4.train_fold(args.model, arr, y, np.arange(len(y)), [], img_size=size, epochs=args.epochs,
                                        bs=args.bs, lr=args.lr, seed=SEED + 100, log=log,
                                        ckpt_path=MODEL_DIR / f"t4_{args.tag}_full.pt", aug_kw=aug_kw, grad_ckpt=args.grad_ckpt,
                                        layer_decay=args.layer_decay, warmup_epochs=args.warmup_epochs,
-                                       sam_rho=args.sam_rho, mixstyle_stages=args.mixstyle, accum=args.accum)
+                                       sam_rho=args.sam_rho, mixstyle_stages=args.mixstyle, accum=args.accum, init_head=init_head)
         tp = task4.predict_paths(model, test.path.values, size, tta=True)
         np.savez_compressed(out_path, test_probs=tp, test_file_name=np.array(test.file_name.tolist(), dtype="U"))
         (log_dir / f"t4_{args.tag}_full_history.json").write_text(json.dumps(hist, indent=1))
@@ -94,11 +120,12 @@ def main():
             continue
         tr, va = folds[f]
         log(f"fold {f}: train {len(tr)} val {len(va)}")
+        init_head = lp_head(tr, f"fold{f}", va)
         model, hist = task4.train_fold(args.model, arr, y, tr, va, img_size=size, epochs=args.epochs, bs=args.bs,
                                        lr=args.lr, seed=SEED + f, log=log,
                                        ckpt_path=MODEL_DIR / f"t4_{args.tag}_fold{f}.pt", aug_kw=aug_kw, grad_ckpt=args.grad_ckpt,
                                        layer_decay=args.layer_decay, warmup_epochs=args.warmup_epochs,
-                                       sam_rho=args.sam_rho, mixstyle_stages=args.mixstyle, accum=args.accum)
+                                       sam_rho=args.sam_rho, mixstyle_stages=args.mixstyle, accum=args.accum, init_head=init_head)
         vp = task4.predict_array(model, arr[va], size, tta=True)
         tp = task4.predict_paths(model, test.path.values, size, tta=True)
         np.savez_compressed(out_path, val_idx=va, val_probs=vp, test_probs=tp,

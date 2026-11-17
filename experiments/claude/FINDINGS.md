@@ -2786,3 +2786,162 @@ crashed after the extraction (the two extra views clashed with the existing prob
   over v25 (0.86148): the best public score so far (top of the LB 0.86750). The size is at the edge of the public split's noise for
   184 changed labels, so it neither confirms nor refutes the nested gain; v27 is kept on the nested evidence, as agreed before the
   upload. Snapshot `versions/v27_LB0.86177/`, `submission.csv` = v27.
+
+## Round 38 (2026-11-17): all-in on Task 4 foundation robustness (user brief after v27 = 0.86177)
+
+Two steps (user): (1) a "super-probe" on frozen features of large backbones from other families, on the laptop; (2) DINOv2-L with
+LP-FT and full WiSE-FT, on Colab. Leaderboard at the start: ML003 0.87046, ML008 0.86405, ML007 (us) 0.86177, fourth 0.85209.
+
+**Step 1a, frozen features** (`gm_r38_t4_feat_extract.py`; training images under the five scoring views, test images full frame;
+inference only, caches in the probe's layout). The frames are 230 x 120, so inputs above 224 only upsample: the brief's 384 / 448
+checkpoints would have cost 3-7x more on the laptop for no new pixels.
+
+| backbone (timm) | input | dim | where | time |
+|---|---|---|---|---|
+| vit_so400m_patch14_siglip_224.v2_webli (SigLIP 2 SO400M) | 224 | 1,152 | laptop | 77.7 min |
+| eva02_large_patch14_448.mim_m38m_ft_in22k_in1k (position embedding resampled) | 224 | 1,024 | Colab A100 | both under about 30 min |
+| convnext_large_mlp.clip_laion2b_soup_ft_in12k_in1k_320 | 320 | 1,536 | Colab A100 | (from the upload to the files) |
+
+The two Colab caches were checked against a laptop recomputation of 128 training images (all five views) and 64 test images: cosine
+0.9998 (EVA-02-L, bf16 on a different GPU) and 0.99999 (ConvNeXt-L); shapes, finiteness and the test order were checked too.
+
+**Step 2 code, LP-FT and full WiSE-FT** (for Colab; `colab/t4_colab_train.ipynb`, built by `colab/build_t4_colab_nb.py`):
+`src/task4.fit_lp_head` fits the frozen probe's logistic regression (three views, C 0.03) on the pre-logit features of the model at
+its fine-tuning input (126 x 238) and folds the standardisation into the model's own head; `train_fold(init_head=...)` starts
+fine-tuning (and the EMA) from it; `scripts/train_task4.py --lp-ft` caches the head per fold as `models/t4_<tag>_fold<f>_lphead.pt`.
+`gn_r38_t4_wiseft_full.py` interpolates every weight, head included, between the fine-tuned model and theta_0 = pretrained backbone +
+LP head (round 37's WiSE-FT had no head for the pretrained end), writes the five views per alpha for `fc_r31_t4_v23_eval.py`, and
+with `--member` the member files (val + test probabilities) per alpha. Smoke test with DINOv2-S, `--epochs 0`, fold 0: theta_0's
+validation macro-F1 0.8506 equals the trained fold's (the head folding and the EMA start are exact), views of alpha 0 and 0.5 are
+identical (as they must be at 0 epochs), member files equal the trainer's to the last digit. Recipe on Colab: lr 2e-5, layer decay
+0.85, 2 + 13 epochs, HUD dropout 0.5, 126 x 238, gradient checkpointing below 60 GB; fold-0 gate as in round 37 (alpha = 1 or a
+WiSE-FT point must pass the hard-view rule and the v24 check).
+
+**Step 1b, super-probe** (`go_r38_t4_superprobe.py`, 16 min on the laptop GPU; candidates and rule fixed before the run, see its
+docstring; reference v27 = members + 10% logistic probe on the first four backbones: full 0.9892, zoom70 0.9763, HUD hidden 0.9656,
+dark frames 0.9741).
+
+| probe alone (v17 rule) | full | zoom70 | HUD hidden | dark frames |
+|---|---|---|---|---|
+| v27: logistic, base4 (3,328-d), C 0.03 | 0.9370 | 0.9031 | 0.8785 | 0.8774 |
+| logistic, base4 + new3 (7,040-d), C 0.01 / 0.03 / 0.1 | 0.9489 / 0.9438 / 0.9401 | 0.9203 / 0.9153 / 0.9103 | 0.8971 / 0.8911 / 0.8850 | 0.8990 / 0.8913 / 0.8863 |
+| **MLP, base4 + new3** | **0.9724** | **0.9510** | **0.9321** | **0.9342** |
+| (diagnostic) SigLIP2-SO400M / EVA-02-L / ConvNeXt-L CLIP alone, logistic | 0.8968 / 0.8366 / 0.8746 | | | |
+
+| against v27 | full | zoom70 | HUD hidden | dark frames | zoom / HUD folds | verdict |
+|---|---|---|---|---|---|---|
+| S1 logistic, C 0.03, w 0.10 | +0.0001 | +0.0003 | +0.0002 | -0.0001 | 3/5 | fail |
+| S2 logistic, (C, w) nested (C 0.01, w 0.15 in four folds) | -0.0000 | +0.0002 | -0.0003 | -0.0003 | 2/5 | fail |
+| **S3 MLP, w nested (0.20 in all five folds)** | **+0.0009** | **+0.0009** | **+0.0003** | **+0.0032** | **5/5** | **PASS** |
+| (diagnostic) base4 + one new backbone, logistic C 0.03, w 0.10 | +0.0001 to +0.0005 | -0.0002 to +0.0002 | -0.0003 to +0.0003 | -0.0000 to +0.0012 | | all fail |
+
+* With a linear probe the three new backbones add little (each alone is weaker than the four of v27 together); a small MLP on the
+  same 7,040 features is the change: the probe alone jumps from 0.937 to 0.972 on full frames and from 0.877 to 0.934 on the real dark
+  frames, and at 20% it lifts every view of the ensemble, the dark frames by +0.0032 (by fold +0.0000 +0.0026 +0.0056 +0.0047
+  +0.0032). In-sample the MLP's gain grows with its weight (w 0.10: dark +0.0012, HUD -0.0004; 0.15: +0.0022 / -0.0001; 0.20: +0.0032
+  / +0.0003); 0.20 is the top of the grid fixed before the run and was not extended.
+
+**v27 -> v28 prepared (user go-ahead 2026-11-17 ~14:05):** `scripts/train_task4_probe.py` with the three new backbones and PROBE = "mlp"
+(the S3 code), `PROBE_W4` 0.10 -> 0.20 (`scripts/nb_part2.py`); the v27 probe files are kept in `outputs/preds/probe_v27/` and in
+`versions/v27_LB0.86177/`. The refitted probe reproduces S3 exactly (probe alone 0.9724; ensemble full +0.0009, dark +0.0032).
+`task4/task4.ipynb` re-executed: rule at the training mix 0.9883 -> 0.9891, at a balanced mix 0.9892 -> 0.9901. `submission_v28.csv`
+(sha256 d725001f...83f7ef03): **259 of 25,889 Task 4 labels change** (1.0%), spread over all pairs (largest pube -> freefried 34,
+fiveN -> roblock 30, freefried -> pube 25); class shares move by at most 0.05 points; Tasks 1, 2, 3, 5 identical to v27.
+On the training images (out of fold, full frame) the same change flips only 51 labels (0.16%): v28 right in 36, v27 right in 11,
+both wrong in 4 (net +25); on the dark frames 16 flips, 13 to 1 for v28. The test images flip six times as often, as expected under
+the train / test shift (reported only; nothing is chosen from it).
+Expectation stated before any upload (equal task weights assumed; the leaderboard's weights are unknown): if the test flips are won
+at v27's observed margin (about +0.0003 public for 184 flips), about +0.0004; at the training images' margin (36 : 11), about +0.0010;
+the public split's noise for about 260 labels is about +-0.0003. Central guess 0.8622-0.8625, range 0.8617-0.8630. Even if every one of
+the 259 flips were a correction, Task 4 would gain about +0.010 and the public score about +0.002 (0.8638): v28 alone cannot reach
+0.864.
+
+**Step 2 on Colab, fold-0 gate: FAIL** (A100, 0.61 h; 106 s per epoch against 656 s on the laptop, 6.2x). LP head (theta_0) 0.8955,
+LP-FT fold 0 0.9865 (dinov2_v2 0.9869). Alone, on fold 0 against dinov2_v2: full 0.9857 vs 0.9855, zoom70 0.9738 vs 0.9720, gamma 3.5
+0.9555 vs 0.9412, 75% grid 0.8729 vs 0.8529, real dark 0.9764 vs 0.9754, but HUD hidden 0.9535 vs 0.9568. In the v23 ensemble every
+alpha >= 0.7 passes the hard-view rule (alpha 1 at weight 8: hard mean +0.0063, mostly gamma +0.0145 and grid +0.0094) and none passes
+the v24 check: HUD hidden falls whenever zoom70 rises (alpha 1, weight 8: zoom70 +0.0016, HUD hidden -0.0003, dark +0.0006; weight 2:
+zoom70 +0.0000, dark +0.0000). alpha 0.5 is worse and theta_0 alone (frozen backbone + LP head) costs on every view. The same pattern
+as dinov2_r2 in round 36: gains on the synthetic gamma / grid views, not on HUD-hidden and real dark frames. The notebook stopped as
+designed; folds 1-4 were not trained.
+* **v28 uploaded 2026-11-17 14:17 (user's approval; Kaggle CLI, ref 58460556): public 0.86192**, +0.00015 over v27: positive, at the
+  low end of the range stated before the upload (0.8617-0.8630; central 0.8622-0.8625), i.e. the test flips were won at a smaller
+  margin than v27's or the public split's noise went against it. Best public score so far. Snapshot `versions/v28_LB0.86192/`
+  (preds pruned to the git-tracked files, as v26 / v27), `submission.csv` = v28, README rows.
+* Colab outputs of the fold-0 run stored on the laptop (2026-11-17 ~14:40, from the user's Drive download): checkpoint and LP head in
+  `outputs/models/` (git-ignored), `outputs/logs/t4_dinov2L_lpft*`, gate logs in `outputs/r38/`, the five fold-0 view files in
+  `outputs/r30_views/dinov2L_lpft*_fold0.npz`, `outputs/preds/t4_dinov2L_lpft_fold0.npz`; the other 48 files in the download were
+  byte-identical to the repo's.
+
+## Round 39 (2026-11-17 afternoon): building on the v28 probe (user brief after v28 = 0.86192)
+
+**Step 1, probe heads / weight / gating** (`gp_r39_t4_probe_heads.py`, 17 min on the laptop GPU; candidates and the acceptance through
+N fixed before the run, see its docstring; reference v28: full 0.9901, zoom70 0.9772, HUD hidden 0.9659, dark frames 0.9772).
+Probes alone (v17 rule; full / zoom70 / HUD hidden / dark): raw MLP (v28) 0.9724 / 0.9510 / 0.9321 / 0.9342; per-backbone-L2 MLP
+0.9736 / 0.9510 / 0.9327 / 0.9401; L2 logistic (C 0.01) 0.9494 / 0.9186 / 0.8961 / 0.9005; L2 cosine head 0.8924 / 0.8678 / 0.8246 /
+0.8316; mean of the three L2 heads 0.9614 / 0.9339 / 0.9139 / 0.9187. The members' maximum probability is below 0.75 for 3.5% of the
+full frames, 7.6% zoomed, 11.5% HUD hidden, 7.1% of the dark frames.
+
+| against v28 (settings nested) | full | zoom70 | HUD hidden | dark | zoom / HUD folds | verdict |
+|---|---|---|---|---|---|---|
+| R1 raw MLP, w in {0.20, ..., 0.35} (0.35 in 5/5) | +0.0006 | +0.0011 | -0.0000 | +0.0027 | 5/5 | fail (HUD) |
+| R2 L2 MLP, w (0.35 in 4/5) | +0.0007 | +0.0011 | +0.0002 | +0.0017 | 5/5 | pass |
+| R3 mean of the three L2 heads, w | never chosen | | | | | fail |
+| R4 raw MLP gated (0.35 / 0.40 in 4/5) | +0.0004 | +0.0009 | -0.0003 | +0.0008 | 4/5 | fail |
+| R5 multi-head gated | never chosen | | | | | fail |
+| **N, nested over all 28 settings** (R1 0.35 in four folds, R2 0.35 in one) | **+0.0006** | **+0.0011** | **+0.0001** | **+0.0022** | **5/5** | **PASS** |
+
+* By the procedure fixed before the run, N passing makes the pipeline setting the best one on all five folds: **R1, the v28 probe at
+  w 0.35** (in-sample against v28: full +0.0006, zoom70 +0.0011, HUD hidden -0.0000, dark +0.0027). On its own its HUD-hidden delta
+  is flat; R2 (L2 MLP at 0.35: +0.0008 / +0.0011 / +0.0002 / +0.0023) is as good within noise but needs a new probe variant.
+* The probe weight is again chosen at the top of the grid (0.20 < 0.25 < 0.30 < 0.35 in-sample on zoom70 and the dark frames): the
+  frozen-feature probe keeps adding robustness as it gets more say. The multi-head mean is worse than the MLP alone (the logistic and
+  cosine heads are far weaker), and confidence gating does not help (w_high 0.50 costs -0.0016 on HUD hidden).
+
+**v28 -> v29 prepared (user go-ahead 2026-11-17, R1 as fixed before the run):** `PROBE_W4` 0.20 -> 0.35 (`scripts/nb_part2.py`; notebook
+text in `build_task_notebooks.py`); the probe files are v28's (sha identical to `versions/v28_LB0.86192/`), nothing refitted.
+`task4/task4.ipynb` rebuilt and re-executed (log `outputs/r39/v29_task4_nb.log`): OOF argmax 0.9897 -> 0.9901, rule at the training
+mix 0.9891 -> 0.9896, at a balanced mix 0.9901 -> 0.9907; the class multipliers stay off in both (nested gain -0.0001 / +0.0004,
+below the 0.0005 bar), so the probe weight is the only difference. `submission_v29.csv` (sha256 64cda3ae...ffdc95260): **315 of
+25,889 Task 4 labels change** (1.2%), spread over all pairs (largest Free Fried -> PUBE 41, Roblock -> PUBE 28, FiveN -> Roblock 26);
+class shares move by at most 0.09 points; Tasks 1, 2, 3, 5 identical to v28. Not uploaded; `submission.csv` is still v28.
+On the training images (OOF, full frame) the same change flips 55 labels (0.17%): v29 right 29, v28 right 20, both wrong 6 (net +9,
+against +25 for v27 -> v28); dark / low-contrast frames 22 flips, 13 to 7 for v29. The test images flip seven times as often.
+Expectation stated before any upload (equal task weights assumed): at the training images' margin (29 : 20) about +0.0004 public; at
+the fraction of that margin v28 realised (+0.00015 of a predicted +0.0010, about 15%) about +0.0001; the public split's noise for
+about 300 labels is about +-0.0003. Central guess 0.8619-0.8621, range 0.8616-0.8625: a step within noise, kept or not on the nested
+evidence as agreed. Base for round 39 step 2 (ViT-H/14 CLIP + Swin-L features from Colab) is v29 -> a pass there becomes v30.
+
+**Step 2, two more backbones for the probe: FAIL** (`gq_r39_t4_probe9.py`, 36 min on the laptop GPU; log `outputs/r39/gq_probe9.log`).
+Features of OpenCLIP ViT-H/14 LAION-2B (1,280) and Swin-L IN-22k (1,536) extracted on Colab by the user (`gm_r38_t4_feat_extract.py`,
+`TRAIN = False`); checked on the laptop: shapes 31,546 x 5 views / 25,889 test rows, finite, test rows in `test.csv` order, and 128
+training images re-embedded on the laptop GPU agree at cosine >= 0.9998 on every view (fp16 storage). Candidates and the rule fixed
+before the run (docstring); reference v29 (members + 0.35 x the seven-backbone MLP): full 0.9907, zoom70 0.9783, HUD hidden 0.9659,
+dark frames 0.9799. Probes alone (full / zoom70 / HUD hidden / dark): P7 (v29) 0.9724 / 0.9510 / 0.9321 / 0.9342 (reproduces v28's
+probe exactly); P9 (+ ViT-H + Swin-L) 0.9755 / 0.9542 / 0.9348 / 0.9384; P8H (+ ViT-H) 0.9738 / 0.9520 / 0.9336 / 0.9344; P8S (+ Swin-L)
+0.9754 / 0.9536 / 0.9329 / 0.9406; ViT-H alone 0.9418 / 0.9058 / 0.8802 / 0.8760; Swin-L alone 0.9534 / 0.9218 / 0.8729 / 0.9025.
+
+| against v29 (w nested) | full | zoom70 | HUD hidden | dark | zoom / HUD folds | verdict |
+|---|---|---|---|---|---|---|
+| A P9, w in {0.30, ..., 0.45} | +0.0001 | -0.0002 | +0.0001 | -0.0015 | 2/5 | fail |
+| B P8H | -0.0001 | +0.0000 | -0.0001 | +0.0001 | 3/5 | fail |
+| C P8S | +0.0002 | -0.0003 | -0.0003 | -0.0007 | 0/5 | fail |
+| W v29 probe at 0.40 / 0.45 | never chosen | | | | | fail |
+| **N, nested over all 14 settings** | **+0.0001** | **-0.0001** | **+0.0001** | **-0.0012** | 3/5 | **fail** |
+
+* The stronger probe (alone +0.003 to +0.004 on every view) does not carry into the ensemble: at 35-40% the members already get right
+  what the probe now adds, and the per-fold picks scatter (P8H / P9, 0.30-0.40); the dark-frame deltas swing by fold (-0.0043 to
+  +0.0020). Nine backbones of frozen features is past the point of returns for this probe.
+* The weight alone saturates at 0.35: the v29 probe at 0.40 / 0.45 is worse in-sample on every view (0.45: zoom70 -0.0009, dark
+  -0.0012), so 0.35 is the peak of the weight curve, not an edge of the grid. v29 stays the candidate; no v30 from step 2.
+* **v29 uploaded 2026-11-17 20:52 (user's approval; Kaggle CLI, ref 58470803): public 0.86197**, +0.00005 over v28, inside the
+  central range stated before the upload (0.8619-0.8621). Best public score so far. `submission.csv` = v29, snapshot
+  `versions/v29_LB0.86197/` (preds pruned to the git-tracked files, as v26-v28), README rows.
+
+**Step 3 prepared for Colab (user go-ahead 2026-11-17 ~21:00):** `colab/t4_colab_train.ipynb` rebuilt from `colab/build_t4_colab_nb.py`
+with `TAG = "dinov2L_hud70"`, `TRAIN = True`, `EXTRACT = []`, `LP_FT = False` (no LP head, no WiSE-FT): DINOv2 ViT-L/14 at 126 x 238,
+lr 3e-5, layer decay 0.85, 2 + 13 epochs, HUD dropout 0.70, batch 64, gradient checkpointing below 60 GB. Gate fixed before the run (the
+user's rule): fold 0 scored against the v23 members by `fc_r31_t4_v23_eval.py`; folds 1-4 and the full refit only if one fixed-weight
+variant passes the v24 check (zoom70, HUD hidden, real dark / low-contrast frames all > 0, full >= -0.0005; the hard-view mean rule is
+printed, no longer required). After all folds the member is judged on the laptop against v29 (members + 35% probe).
+`em_r30_t4_hardviews.py` knows the new tag (replaces dinov2_v2); bundle `colab/upload/cpe342_code.zip` rebuilt (35,108,374 bytes).

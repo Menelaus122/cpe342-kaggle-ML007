@@ -290,9 +290,76 @@ def predict_paths(model, paths, img_size, bs=128, tta=True, chunk=4096):
     return np.concatenate(outs)
 
 
+# ------------------------------------------------------------- LP-FT (round 38): linear-probe head as the fine-tuning start
+def _lp_zoom(x, f=0.7):
+    th = torch.zeros(x.shape[0], 2, 3, device=x.device)
+    th[:, 0, 0], th[:, 1, 1] = f, f
+    return F.grid_sample(x, F.affine_grid(th, x.shape, align_corners=False), mode="bilinear", padding_mode="border", align_corners=False)
+
+
+def _lp_centre_grey(x):
+    H, W = x.shape[2:]
+    m = torch.zeros(1, 1, H, W, device=x.device)
+    m[..., H // 5:4 * H // 5, W // 5:4 * W // 5] = 1
+    return x * m + 0.5 * (1 - m)
+
+
+LP_VIEWS = {"full": lambda x: x, "zoom70": _lp_zoom, "centre_grey": _lp_centre_grey}   # the frozen-feature probe's three views
+
+
+@torch.no_grad()
+def lp_features(model, arr, rows, img_size, bs=128, device="cuda"):
+    """Pre-logit features (what the classifier head reads) of the rows of a uint8 NHWC array under LP_VIEWS, each view applied at
+    the native frame and then resized as to_gpu_batch does; mean of the image and its h-flip. Returns {view: (n, d) float32}."""
+    model.eval()
+    out = {v: [] for v in LP_VIEWS}
+    for i in range(0, len(rows), bs):
+        x0 = torch.from_numpy(arr[rows[i:i + bs]]).to(device).permute(0, 3, 1, 2).float().div_(255)
+        for v, fn in LP_VIEWS.items():
+            x = normalize(F.interpolate(fn(x0), size=img_size, mode="bilinear", align_corners=False)).to(memory_format=torch.channels_last)
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                f = model.forward_head(model.forward_features(x), pre_logits=True).float()
+                f = f + model.forward_head(model.forward_features(x.flip(-1)), pre_logits=True).float()
+            out[v].append((f / 2).cpu().numpy())
+    return {v: np.concatenate(f) for v, f in out.items()}
+
+
+def fit_lp_head(model, arr, labels, rows, img_size, C=0.03, iters=300, device="cuda"):
+    """LP-FT step 1 (Kumar et al., ICLR 2022): multinomial logistic regression on the frozen pretrained features of the training
+    rows under the probe's three views (C = 0.03 and sklearn's objective on standardised features, as scripts/train_task4_probe.py),
+    folded into the model's own head: logits = f @ (W / sd) + (b - (mu / sd) @ W). Returns {"weight": (5, d), "bias": (5,)} (CPU)."""
+    feats = lp_features(model, arr, np.asarray(rows), img_size, device=device)
+    mu, sd = feats["full"].mean(0), feats["full"].std(0) + 1e-6
+    A = torch.from_numpy(np.vstack([(feats[v] - mu) / sd for v in LP_VIEWS])).to(device)
+    Y = torch.from_numpy(np.tile(np.asarray(labels)[rows], len(LP_VIEWS))).long().to(device)
+    W = torch.zeros(A.shape[1], 5, device=device, requires_grad=True)
+    b = torch.zeros(5, device=device, requires_grad=True)
+    opt = torch.optim.LBFGS([W, b], lr=1.0, max_iter=iters, history_size=20, line_search_fn="strong_wolfe", tolerance_grad=1e-6)
+
+    def closure():
+        opt.zero_grad()
+        loss = F.cross_entropy(A @ W + b, Y, reduction="sum") + 0.5 / C * (W ** 2).sum()
+        loss.backward()
+        return loss
+    opt.step(closure)
+    W, b = W.detach().cpu().double(), b.detach().cpu().double()
+    mu_t, sd_t = torch.from_numpy(mu).double(), torch.from_numpy(sd).double()
+    return {"weight": (W / sd_t[:, None]).T.float().contiguous(), "bias": (b - (mu_t / sd_t) @ W).float()}
+
+
+def set_head(model, head):
+    """Copy a {"weight", "bias"} head (fit_lp_head) into the model's classifier."""
+    clf = model.get_classifier()
+    with torch.no_grad():
+        clf.weight.copy_(head["weight"].to(clf.weight.device, clf.weight.dtype))
+        clf.bias.copy_(head["bias"].to(clf.bias.device, clf.bias.dtype))
+    return model
+
+
 def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epochs=10, bs=64,
                lr=2e-4, wd=0.05, label_smoothing=0.1, mix_prob=0.8, seed=42, log=print, ckpt_path=None, aug_kw=None,
-               class_balanced=False, layer_decay=None, grad_ckpt=False, warmup_epochs=1, sam_rho=0.0, mixstyle_stages=0, accum=1):
+               class_balanced=False, layer_decay=None, grad_ckpt=False, warmup_epochs=1, sam_rho=0.0, mixstyle_stages=0, accum=1,
+               init_head=None):
     """Train one fold on the shared preloaded uint8 array `arr` (rows tr_idx); returns
     (model carrying the final EMA weights, history). With an empty `va_idx` it trains on all given
     rows without per-epoch validation (final Train+Val refit). class_balanced=True draws each epoch's rows with
@@ -305,7 +372,9 @@ def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epo
     with probability 0.5 per batch, each sample's channel mean / SD is mixed with another sample's (Beta(0.1, 0.1) weights).
     The EMA copy is taken before the hooks are attached, so inference never mixes styles.
     accum > 1 (round 37): gradient accumulation; each optimiser step still sees `bs` images, split into `accum` micro-batches of
-    bs / accum (same schedule, same effective batch, less GPU memory: DINOv2-L at 126x238 needs it on an 8 GB card)."""
+    bs / accum (same schedule, same effective batch, less GPU memory: DINOv2-L at 126x238 needs it on an 8 GB card).
+    init_head (round 38, LP-FT): a {"weight", "bias"} head from fit_lp_head, copied into the classifier before training (and before
+    the EMA copy), so fine-tuning starts from the linear probe instead of a random head and moves the pretrained features less."""
     from sklearn.metrics import f1_score
     from timm.utils import ModelEmaV3
 
@@ -323,6 +392,8 @@ def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epo
     y_gpu = torch.as_tensor(labels, device=device)
 
     model = create_model(model_name, img_size=img_size).to(device).to(memory_format=torch.channels_last)
+    if init_head is not None:
+        set_head(model, init_head)
     ema = ModelEmaV3(model, decay=0.999)
     if grad_ckpt:   # after the EMA copy, so the returned EMA model runs inference without it
         model.set_grad_checkpointing(True)

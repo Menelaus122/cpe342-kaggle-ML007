@@ -646,7 +646,7 @@ For each backbone, every fold model (final EMA weights) predicts its held-out fo
 * **DeiT-III Small/16** (Vision Transformer, IN-22k) at 192×384, with position embeddings resampled to the 12×24 token grid;
 * **HUD-dropout versions** (round 19) of ConvNeXt-Tiny, ConvNeXt-Tiny IN-22k, EfficientNetV2-S IN-21k and DeiT-III-S, and (round 21) of the larger ConvNeXt-Small IN-12k.
 * **DINOv2 ViT-B/14** (self-supervised, LVD-142M; round 28) fine-tuned at 126×238, the images' own aspect ratio (9×17 patches), with lr 5e-5, layer-wise lr decay 0.8, 2 warm-up + 13 cosine epochs and HUD dropout. Alone it is the most robust model on zoomed, darkened and partly hidden frames (fold 0: 70% zoom 0.974 against 0.971 for the other seven together), and it counted three times in the average from v20 (weight chosen nested on full / zoom / HUD-hidden views: +0.0006 over equal weights, 5/5 folds). **Round 30:** with the gamma 3.5 and 75%-grid views added to the criterion, the nested choice moves further away from the two plain members: DINOv2 ×8, each HUD-dropout member ×3, the plain ConvNeXt-T and DeiT-III ×1 (+0.0014 on the mean of the four hard views, better in 5/5 folds, full frames −0.0001). An earlier run of the same backbone with lr 1.5e-5 and decay 0.65 for 10 epochs reached only 0.940: the recipe, not the backbone, was the problem.
-* A **logistic probe on frozen CLIP + DINOv2-B + SigLIP 2 + DINOv2-L features** (round 27; DINOv2 ViT-L/14 added in round 37) is mixed in at 10%. Alone the probe is far weaker than the fine-tuned members (full frames 0.937, HUD hidden 0.879), but frozen features are not bent towards what separates the training frames; adding the DINOv2-L features raised the probe by +0.013 to +0.019 on every view and the ensemble by +0.0008 on HUD-hidden and +0.0002 on real dark / low-contrast frames, with full frames and the 70% zoom unchanged (`experiments/claude/gi_r37_t4_probeL.py`, rule fixed before the run).
+* A **probe on frozen foundation features** is mixed in at **35%** (v29; 20% in v28; 10% with a logistic probe in v19-v27). Features of seven frozen backbones, 7,040 per image: CLIP ViT-B/16, DINOv2 ViT-B/14, SigLIP 2 ViT-B/16 (round 27), DINOv2 ViT-L/14 (round 37), SigLIP 2 SO400M/14, EVA-02-L/14 and ConvNeXt-L CLIP (round 38); the probe is a small MLP (one hidden layer of 1,024, dropout 0.2 / 0.5, weight decay, label smoothing; settings fixed before the run, mean of three seeds), fitted on the full frame, the 70% zoom and the HUD-hidden view of every training image. Alone it reaches 0.972 balanced macro-F1 on full frames (logistic probe of v27: 0.937). Round 38 (`experiments/claude/go_r38_t4_superprobe.py`, rule fixed before the run): against v27, full +0.0009, 70% zoom +0.0009, HUD hidden +0.0003, real dark / low-contrast frames +0.0032, better in 5/5 folds; the weight 0.20 was chosen nested in every fold. With a logistic probe the new features did not help. Round 39 (`experiments/claude/gp_r39_t4_probe_heads.py`, rule fixed before the run): the weight grid extended to 0.20-0.35 and chosen nested together with per-backbone L2-normalised features, a mean of three probe heads and confidence-gated mixing; the plain MLP at 0.35 is chosen in four folds (the L2 variant in the fifth), and against v28 the nested choice gives full +0.0006, 70% zoom +0.0011, HUD hidden +0.0001, real dark frames +0.0022, zoom / HUD better in 5/5 folds. Head averaging and gating did not help. Frozen features are not bent towards what separates the training frames, which is why the probe helps on the hard views.
 
 **Why HUD dropout.** Occluding parts of validation images shows that the first two models read mostly the on-screen HUD, above all the bottom control strip: with only the centre of the frame visible, fold-0 accuracy falls from 0.988 to 0.934 (PUBE Mobile 0.890). This shortcut is measured on training images: a model that needs the HUD fails on any frame without one (menus, crowds, zoomed or cropped captures). HUD dropout hides, with probability 0.5 per training image, the bottom strip, the top strip and corners, or all borders, or zooms into the central 60–75% (`task4.GPUAugment._hud`). On the same fold-0 validation images it keeps full-frame accuracy (0.9878 → 0.9872, difference inside noise) and raises centre-only accuracy to 0.961 (+0.027, 95% CI [+0.022, +0.033]; PUBE 0.944) and accuracy on a natural 70% centre zoom from 0.961 to 0.968 (+0.008, CI [+0.004, +0.012]). Averaging a normal and a HUD-dropout model is best or near-best on every view (`experiments/claude/cm_r19_t4_hud_eval.py`). (Provenance: the idea was also prompted by low-confidence test frames that looked HUD-less, round 19; the decision rests on the training-image results above.)
 
@@ -698,12 +698,12 @@ test4 = wmean4([test_tag[t] for t in T4_TAGS])
 if len(T4_TAGS) > 1:
     pf.loc["probability average (equal weights)"] = [np.nan] * N_FOLDS + [macro_f1(y4, np.mean([oof_tag[t] for t in T4_TAGS], axis=0).argmax(1))]
     pf.loc["probability average (member weights)"] = [np.nan] * N_FOLDS + [macro_f1(y4, oof4.argmax(1))]
-# Frozen-feature probe (round 27, scripts/train_task4_probe.py): logistic regression on frozen CLIP + DINOv2-B + SigLIP 2 features
-# (+ DINOv2-L from round 37, experiments/claude/gi_r37_t4_probeL.py),
-# fitted on the full frame, the 70% zoom and the HUD-hidden view of every training image. Much weaker alone, but it does not share
-# the fine-tuned members' errors: at 10% weight the balanced macro-F1 (mean of full / zoom / HUD-hidden frames, alpha 0.75) rises by
-# +0.0005, better in 4/5 folds, with the weight chosen nested (experiments/claude/dr_r27_t4_probe_fusion.py).
-PROBE_W4 = 0.10
+# Frozen-feature probe (scripts/train_task4_probe.py), fitted on the full frame, the 70% zoom and the HUD-hidden view of every
+# training image. Round 27: logistic regression on frozen CLIP + DINOv2-B + SigLIP 2 features at 10% (experiments/claude/
+# dr_r27_t4_probe_fusion.py); round 37: + DINOv2-L (gi_r37_t4_probeL.py); round 38 (v28): + SigLIP 2 SO400M, EVA-02-L, ConvNeXt-L CLIP,
+# an MLP instead of the logistic regression, weight 0.20 chosen nested in all five folds (go_r38_t4_superprobe.py candidate S3);
+# round 39 (v29): weight grid 0.20-0.35 chosen nested with other heads / gating -> the same MLP at 0.35 (gp_r39_t4_probe_heads.py).
+PROBE_W4 = 0.35
 HAS_PROBE4 = all((C.PRED_DIR / f"t4_probe_fold{f}.npz").exists() for f in range(N_FOLDS))
 if HAS_PROBE4:
     oof_probe, test_probe, pfp = np.zeros((len(y4), 5)), np.zeros((len(t4_test), 5)), []
@@ -756,7 +756,7 @@ for i, v in enumerate(pc4[::-1]):
     axes[1].text(v, i, f" {v:.4f}", va="center", fontsize=8.5)
 axes[1].set_xlim(0.9, 1.0); axes[1].set_title("Per-class F1 (OOF)")
 plt.tight_layout(); savefig(fig, "t4_confusion"); plt.show()
-summary.append(["Task 4", "macro-F1", SCORE4, f"{' + '.join(T4_TAGS)} 5-fold, GPU aug + Mixup/CutMix, EMA, h-flip TTA{' + 10% frozen-feature probe' if HAS_PROBE4 else ''}, balanced-prior rule (alpha 0.75)"])
+summary.append(["Task 4", "macro-F1", SCORE4, f"{' + '.join(T4_TAGS)} 5-fold, GPU aug + Mixup/CutMix, EMA, h-flip TTA{f' + {PROBE_W4:.0%} frozen-feature probe' if HAS_PROBE4 else ''}, balanced-prior rule (alpha 0.75)"])
 """)
 code(r"""
 # Diversity of the members on held-out TRAINING images: pairwise agreement of their OOF labels (test images are not used)
