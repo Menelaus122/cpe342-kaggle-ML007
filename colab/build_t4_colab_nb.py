@@ -1,5 +1,11 @@
 """Write colab/t4_colab_train.ipynb (run from the repo root):  python colab/build_t4_colab_nb.py"""
+import sys
+
 import nbformat as nbf
+
+PROFILE = sys.argv[1] if len(sys.argv) > 1 else "seed2"     # seed2 -> colab/t4_colab_train.ipynb; dinov3 -> colab/t4_colab_dinov3.ipynb;
+assert PROFILE in ("seed2", "dinov3", "dinov3b", "dinov3c"), PROFILE   # dinov3b -> colab/t4_colab_dinov3b.ipynb (DINOv3 at lr 8e-5, fold 0
+# only); dinov3c -> colab/t4_colab_dinov3c.ipynb (round 41: the same DINOv3 recipe at 192 x 384, fold 0 only)
 
 nb = nbf.v4.new_notebook()
 md = lambda s: nb.cells.append(nbf.v4.new_markdown_cell(s.strip("\n")))
@@ -66,6 +72,8 @@ TRAIN = True                  # False: only the feature cell runs; True: benchma
 TAG = "dinov2L_hud70_s2"      # round 40 step 3 (round 39: "dinov2L_hud70"; round 38: "dinov2L_lpft")
 LP_FT = False                 # round 38: True (LP head first, then fine-tuning from it, plus WiSE-FT points)
 LR, P_HUD = "3e-5", "0.70"    # round 38: 2e-5, 0.5
+LD, EPOCHS = "0.85", "15"     # layer-wise lr decay and epochs (2 warm-up + the rest cosine)
+MIN_ALONE = None              # fold-0 gate also needs the member's own fold-0 macro-F1 (TTA) >= this (None = no floor)
 GATE_NEEDS = ["v24 check (beyond the grid) PASS"]   # round 38 also needed "hard-view rule PASS"
 FOLDS = [0, 1, 2, 3, 4]       # fold 0 first; folds 1-4 only if fold 0 passes the gate
 GATE = False                  # False: train every fold without the fold-0 gate (round 40: a seed replicate, judged on the laptop)
@@ -79,8 +87,9 @@ ACCUM = 1                     # 64 images per optimiser step in one pass (2 = 2 
 ALPHAS = [0.0, 0.5, 0.7, 0.85] if LP_FT else []    # WiSE-FT points (alpha = 1 is the fine-tuned model itself); LP-FT only
 MEMBER_ALPHAS = [0.5, 0.7, 0.85] if LP_FT else []  # after all folds: member files (val + test probabilities) for these alphas
 MODEL = "vit_large_patch14_reg4_dinov2.lvd142m"
-RECIPE = ["--model", MODEL, "--h", "126", "--w", "238", "--bs", "64", "--accum", str(ACCUM), *(["--lp-ft"] if LP_FT else []),
-          "--lr", LR, "--layer-decay", "0.85", "--warmup-epochs", "2", "--epochs", "15", "--p-hud", P_HUD,
+H, W = 126, 238               # the frame's own aspect ratio: 9 x 17 patches of 14 px
+RECIPE = ["--model", MODEL, "--h", str(H), "--w", str(W), "--bs", "64", "--accum", str(ACCUM), *(["--lp-ft"] if LP_FT else []),
+          "--lr", LR, "--layer-decay", LD, "--warmup-epochs", "2", "--epochs", EPOCHS, "--p-hud", P_HUD,
           "--train-seed-offset", str(SEED_OFFSET)]
 print("recipe:", " ".join(RECIPE))
 
@@ -204,19 +213,19 @@ torch.cuda.reset_peak_memory_stats()
 head = None
 if LP_FT:
     t_lp = time.time()
-    m0 = task4.create_model(MODEL, img_size=(126, 238)).cuda().to(memory_format=torch.channels_last)
-    head = task4.fit_lp_head(m0, arr, tr_df.label.values, np.arange(1280), (126, 238))
-    vp0 = task4.predict_array(task4.set_head(m0, head), arr[1280:], (126, 238))
+    m0 = task4.create_model(MODEL, img_size=(H, W)).cuda().to(memory_format=torch.channels_last)
+    head = task4.fit_lp_head(m0, arr, tr_df.label.values, np.arange(1280), (H, W))
+    vp0 = task4.predict_array(task4.set_head(m0, head), arr[1280:], (H, W))
     print(f"LP head on 1,280 images in {time.time() - t_lp:.0f}s; theta_0 accuracy on 128 others "
           f"{np.mean(vp0.argmax(1) == tr_df.label.values[1280:1408]):.3f}")
     del m0
 m, h = task4.train_fold(MODEL, arr, tr_df.label.values[idx], np.arange(1280), np.arange(1280, 1408),
-                        img_size=(126, 238), epochs=1, bs=64, lr=float(LR), layer_decay=0.85, aug_kw={"p_hud": float(P_HUD)}, grad_ckpt=GRAD_CKPT,
+                        img_size=(H, W), epochs=1, bs=64, lr=float(LR), layer_decay=float(LD), aug_kw={"p_hud": float(P_HUD)}, grad_ckpt=GRAD_CKPT,
                         warmup_epochs=1, accum=ACCUM, init_head=head)
 per_img = h[-1]["secs"] / 1280
 print(f"peak GPU memory {torch.cuda.max_memory_reserved() / 2**30:.1f} GiB; {per_img * 1000:.1f} ms per training image (first epoch, "
-      f"includes warm-up) -> about {per_img * 25237 / 60:.0f} min per fold epoch, {per_img * 25237 * 15 / 3600:.1f} h per fold "
-      f"(laptop: 656 s per epoch, 2.7 h per fold), {per_img * 25237 * 15 * (len(FOLDS) + 1.25 * DO_FULL) / 3600:.1f} h for this run")
+      f"includes warm-up) -> about {per_img * 25237 / 60:.0f} min per fold epoch, {per_img * 25237 * int(EPOCHS) / 3600:.1f} h per fold "
+      f"(laptop: 656 s per epoch, 2.7 h per fold), {per_img * 25237 * int(EPOCHS) * (len(FOLDS) + 1.25 * DO_FULL) / 3600:.1f} h for this run")
 del m, arr
 torch.cuda.empty_cache()
 """)
@@ -251,7 +260,17 @@ def gate_passed():
     out = score([TAG] + [w for w, a in zip(WISE, ALPHAS) if a > 0], "fold0_gate")
     if 0.0 in ALPHAS:
         score([w for w, a in zip(WISE, ALPHAS) if a == 0], "fold0_theta0_info")
-    return any(all(g in l for g in GATE_NEEDS) for l in out.splitlines())
+    ok = any(all(g in l for g in GATE_NEEDS) for l in out.splitlines())
+    if MIN_ALONE is not None:
+        import numpy as np
+        from sklearn.metrics import f1_score
+        from src import task4
+        z = np.load(R / f"outputs/preds/t4_{TAG}_fold0.npz")
+        f1 = f1_score(task4.load_frames()[0].label.values[z["val_idx"]], z["val_probs"].argmax(1), average="macro")
+        print(f"{TAG} alone, fold 0 macro-F1 (TTA) {f1:.4f} -> {'>=' if f1 >= MIN_ALONE else 'below'} the floor {MIN_ALONE}; "
+              f"{', '.join(GATE_NEEDS)}: {'yes' if ok else 'no'}")
+        ok = ok and f1 >= MIN_ALONE
+    return ok
 
 t_start = time.time()
 for f in FOLDS:
@@ -261,7 +280,7 @@ for f in FOLDS:
         # the five scoring views of this fold's validation images (full, zoom70, HUD hidden, gamma 3.5, 75% grid)
         assert run(["experiments/claude/em_r30_t4_hardviews.py", TAG], {"VIEWS_ONLY": "1"}) == 0, f"views of fold {f} failed"
     if WISE and not all((R / f"experiments/claude/outputs/r30_views/{w}_fold{f}.npz").exists() for w in WISE):
-        assert run(["experiments/claude/gn_r38_t4_wiseft_full.py", TAG, "--model", MODEL, "--h", "126", "--w", "238",
+        assert run(["experiments/claude/gn_r38_t4_wiseft_full.py", TAG, "--model", MODEL, "--h", str(H), "--w", str(W),
                     "--alphas", *map(str, ALPHAS), "--folds", str(f)]) == 0, f"WiSE-FT views of fold {f} failed"
     if f == 0 and GATE:
         ok = gate_passed()
@@ -273,7 +292,7 @@ else:
     if DO_FULL and not (R / f"outputs/preds/t4_{TAG}_full.npz").exists():
         assert run(["scripts/train_task4.py", "--tag", TAG, *RECIPE, "--full"]) == 0, "full refit failed"
     if MEMBER_ALPHAS:   # member files of the WiSE-FT points (inference only: validation folds + test images)
-        assert run(["experiments/claude/gn_r38_t4_wiseft_full.py", TAG, "--model", MODEL, "--h", "126", "--w", "238",
+        assert run(["experiments/claude/gn_r38_t4_wiseft_full.py", TAG, "--model", MODEL, "--h", str(H), "--w", str(W),
                     "--alphas", *map(str, MEMBER_ALPHAS), "--member"]) == 0, "WiSE-FT member files failed"
 print(f"done in {(time.time() - t_start) / 3600:.2f} h")
 """)
@@ -303,5 +322,131 @@ for c in nb.cells:
     if c.cell_type == "code" and c.source.startswith(("# ---- 1-epoch benchmark", "# ---- training:")):
         head, body = c.source.split("\n", 1)
         c.source = head + "\nif not TRAIN:\n    print('TRAIN = False: skipped')\nelse:\n" + "\n".join(("    " + l) if l.strip() else l for l in body.split("\n"))
-nbf.write(nb, "colab/t4_colab_train.ipynb")
+out_path = "colab/t4_colab_train.ipynb"
+if PROFILE == "seed2":
+    soup_cell = nbf.v4.new_code_cell(r"""
+# ---- weight soup of the two DINOv2-L seeds (round 40; inference only, about 10-15 min on an A100) -------------------------------
+# uniform average of the EMA weights of dinov2L_hud70 (v30's member) and this run, per fold and for the full refit; needs both
+# seeds' checkpoints in out/models (do not delete t4_dinov2L_hud70_*.pt); compared on the laptop by gx_r40_t4_dinov2L_seed2_eval.py
+SOUP_OUT = "dinov2L_hud70_soup"
+if TRAIN and TAG == "dinov2L_hud70_s2":
+    need = [R / f"outputs/models/t4_{t}_{k}.pt" for t in ("dinov2L_hud70", TAG) for k in [f"fold{f}" for f in FOLDS] + ["full"]]
+    missing = [p.name for p in need if not p.exists()]
+    if missing:
+        print("soup skipped, missing checkpoints:", missing)
+    else:
+        assert run(["experiments/claude/gz_r40_t4_soup.py", "dinov2L_hud70", TAG, SOUP_OUT, "--model", MODEL, "--h", str(H), "--w", str(W),
+                    "--folds", *map(str, FOLDS)]) == 0, "weight soup failed"
+        for sub in ("preds", "r30_views"):
+            for f in sorted((D / "out" / sub).glob(f"*{SOUP_OUT}*")):
+                print(f"{f}  {f.stat().st_size / 1e6:.1f} MB")
+""".strip("\n"))
+    k = next(i for i, c in enumerate(nb.cells) if c.cell_type == "code" and c.source.lstrip().startswith("# ---- what to copy back"))
+    nb.cells.insert(k, soup_cell)
+if PROFILE in ("dinov3", "dinov3b", "dinov3c"):
+    out_path = "colab/t4_colab_dinov3.ipynb"
+    nb.cells[0].source = nb.cells[0].source.replace(
+        "# CPE342 Task 4: GPU training on Colab (round 40 step 3: a second seed of the v30 DINOv2-L member; all folds + full refit)",
+        "# CPE342 Task 4: GPU training on Colab (round 40, revised: DINOv3 ViT-L/16 with v30's recipe; fold 0 + gate, then folds 1-4 + full refit)\n\n"
+        "**This notebook (user brief of 2026-11-18, revised round 40):** `vit_large_patch16_dinov3.lvd1689m` (distilled from the 7B "
+        "DINOv3 teacher on LVD-1689M; RoPE positions, 4 registers) at **144x272** = 9 x 17 patches of 16 px, the same token grid as "
+        "DINOv2-L at 126x238; v30's recipe otherwise (lr 3e-5, layer decay 0.85, HUD dropout 0.70, 15 epochs, gradient checkpointing "
+        "below 60 GB). Tag `dinov3L_hud70`. `GATE = True`: after fold 0 the v24 check against the v23 members decides whether "
+        "folds 1-4 and the full refit run. A compatibility cell (timm version, the model's presence, one forward / backward step "
+        "at 144x272 with the peak GPU memory) runs before the benchmark. The weights are not gated on the Hugging Face hub "
+        "(timm mirror, DINOv3 licence). The sections below describe the earlier runs of this notebook.")
+    src = nb.cells[1].source
+    for old, new in (('TAG = "dinov2L_hud70_s2"', 'TAG = "dinov3L_hud70"'),
+                     ('GATE = False', 'GATE = True'),
+                     ('SEED_OFFSET = 1000', 'SEED_OFFSET = 0'),
+                     ('MODEL = "vit_large_patch14_reg4_dinov2.lvd142m"', 'MODEL = "vit_large_patch16_dinov3.lvd1689m"'),
+                     ('H, W = 126, 238               # the frame\'s own aspect ratio: 9 x 17 patches of 14 px',
+                      'H, W = 144, 272               # 9 x 17 patches of 16 px, the token grid of DINOv2-L at 126 x 238')):
+        assert src.count(old) == 1, old
+        src = src.replace(old, new)
+    nb.cells[1].source = src
+    check = nbf.v4.new_code_cell(r"""
+# ---- DINOv3 compatibility check: timm version, the model, one forward / backward step at H x W (downloads the weights, 1.2 GB) ----
+import timm, torch
+print("timm", timm.__version__)
+if MODEL.split(".")[0] not in timm.list_models("*dinov3*"):
+    raise RuntimeError(f"{MODEL} is not in timm {timm.__version__}: !pip -q install -U timm, then restart and run all")
+print("dinov3 models:", [n for n in timm.list_models("*dinov3*") if "large" in n])
+import sys
+sys.path.insert(0, str(R))
+from src import task4
+torch.cuda.empty_cache()
+torch.cuda.reset_peak_memory_stats()
+m = task4.create_model(MODEL, img_size=(H, W)).cuda().train()
+if GRAD_CKPT:
+    m.set_grad_checkpointing(True)
+x = torch.rand(64, 3, H, W, device="cuda")
+with torch.autocast("cuda", dtype=torch.bfloat16):
+    out = m(task4.normalize(x))
+    tokens = m.forward_features(task4.normalize(x[:1]))
+out.float().sum().backward()
+print(f"logits {tuple(out.shape)}, tokens {tuple(tokens.shape)} (9 x 17 = 153 patches + class + registers), "
+      f"grad of the patch embedding finite {torch.isfinite(m.patch_embed.proj.weight.grad).all().item()}, "
+      f"peak GPU memory for a batch of 64 {torch.cuda.max_memory_allocated() / 2**30:.1f} GiB")
+del m, out, x
+torch.cuda.empty_cache()
+""".strip("\n"))
+    k = next(i for i, c in enumerate(nb.cells) if c.cell_type == "code" and c.source.lstrip().startswith("# ---- 1-epoch benchmark"))
+    nb.cells.insert(k, check)
+if PROFILE in ("dinov3b", "dinov3c"):
+    out_path = "colab/t4_colab_dinov3b.ipynb"
+    nb.cells[0].source = nb.cells[0].source.replace(
+        "# CPE342 Task 4: GPU training on Colab (round 40, revised: DINOv3 ViT-L/16 with v30's recipe; fold 0 + gate, then folds 1-4 + full refit)",
+        "# CPE342 Task 4: GPU training on Colab (round 40: DINOv3 ViT-L/16, new recipe lr 8e-5 / layer decay 0.90 / 18 epochs; fold 0 only)\n\n"
+        "**This notebook (user brief of 2026-11-18 afternoon):** the first DINOv3 run (`dinov3L_hud70`, v30's recipe) reached only 0.9794 "
+        "on fold 0 and was still rising, while the frozen DINOv3-L @ 144x272 probe beats frozen DINOv2-L by +0.031 (full) and +0.040 "
+        "(real dark frames) with the set-up checked (`hb_r40_t4_dinov3_check.py`): the gap is the fine-tuning recipe. One new recipe, "
+        "fixed before the run: **lr 8e-5, layer decay 0.90, 2 warm-up + 16 cosine epochs (18)**, everything else as before (144x272, "
+        "HUD dropout 0.70, batch 64, its own 'avg' pooling, gradient checkpointing below 60 GB, which changes memory only). Tag "
+        "`dinov3L_lr8e5`. **Fold 0 only** (`FOLDS = [0]`, `DO_FULL = False`, about 45-50 min on an A100). Gate, fixed before the run: "
+        "the member alone >= **0.985** macro-F1 on fold 0 (`MIN_ALONE`; DINOv2-L: 0.9885) **and** the v24 check against the v23 "
+        "members; it is then compared with v30 on fold 0 on the laptop. If it fails, DINOv3 is closed. If it passes and the user goes on: "
+        "set `FOLDS = [0, 1, 2, 3, 4]`, `DO_FULL = True` and *Run all* again (fold 0 is reused from Drive). The sections below describe "
+        "the earlier runs of this notebook.")
+    src = nb.cells[1].source
+    for old, new in (('TAG = "dinov3L_hud70"', 'TAG = "dinov3L_lr8e5"'),
+                     ('LR, P_HUD = "3e-5", "0.70"', 'LR, P_HUD = "8e-5", "0.70"'),
+                     ('LD, EPOCHS = "0.85", "15"', 'LD, EPOCHS = "0.90", "18"'),
+                     ('MIN_ALONE = None ', 'MIN_ALONE = 0.985'),
+                     ('FOLDS = [0, 1, 2, 3, 4]       # fold 0 first; folds 1-4 only if fold 0 passes the gate',
+                      'FOLDS = [0]                   # fold 0 only (user brief); after a PASS: [0, 1, 2, 3, 4] and DO_FULL = True'),
+                     ('DO_FULL = True ', 'DO_FULL = False')):
+        assert src.count(old) == 1, old
+        src = src.replace(old, new)
+    nb.cells[1].source = src
+if PROFILE == "dinov3c":
+    out_path = "colab/t4_colab_dinov3c.ipynb"
+    nb.cells[0].source = nb.cells[0].source.replace(
+        "# CPE342 Task 4: GPU training on Colab (round 40: DINOv3 ViT-L/16, new recipe lr 8e-5 / layer decay 0.90 / 18 epochs; fold 0 only)",
+        "# CPE342 Task 4: GPU training on Colab (round 41: DINOv3 ViT-L/16 at 192x384 with v31's recipe; fold 0 only)\n\n"
+        "**This notebook (user brief of 2026-11-18 evening):** v31's DINOv3-L member (`dinov3L_lr8e5`, 144x272 = 9 x 17 patches) at a "
+        "higher input resolution, **192x384 = 12 x 24 patches of 16 px (288 tokens)**; RoPE positions let the model take the larger "
+        "grid without interpolating a position table. Recipe unchanged (lr 8e-5, layer decay 0.90, 2 warm-up + 16 cosine epochs, HUD "
+        "dropout 0.70, batch 64, 'avg' pooling); **gradient checkpointing always on** (`GRAD_CKPT = True`; memory only, not the "
+        "result). Tag `dinov3L_384`. **Fold 0 only** (`FOLDS = [0]`, `DO_FULL = False`; about 1.5 h on an A100, the benchmark cell "
+        "prints the estimate). Gate, fixed before the run: the member alone >= **0.9925** macro-F1 on fold 0 (`MIN_ALONE` = what "
+        "`dinov3L_lr8e5` reached on fold 0: a higher resolution that is not better alone is an expensive replicate) **and** the v24 "
+        "check against the v23 members; then, on the laptop, the fold-0 comparison with v31 (`hh_r41_t4_dinov3_384_fold0.py`, "
+        "variants fixed before the run). If it fails: stop. If it passes and the user goes on: `FOLDS = [0, 1, 2, 3, 4]`, "
+        "`DO_FULL = True`, *Run all* (fold 0 reused from Drive; about 8 h more). The sections below describe the earlier runs.")
+    src = nb.cells[1].source
+    for old, new in (('TAG = "dinov3L_lr8e5"', 'TAG = "dinov3L_384"'),
+                     ('MIN_ALONE = 0.985', 'MIN_ALONE = 0.9925'),
+                     ('GRAD_CKPT = "auto"            # gradient checkpointing changes memory only, not the result: auto = on below 60 GB of GPU memory',
+                      'GRAD_CKPT = True              # always on at 192 x 384 (288 tokens); changes memory only, not the result'),
+                     ('H, W = 144, 272               # 9 x 17 patches of 16 px, the token grid of DINOv2-L at 126 x 238',
+                      'H, W = 192, 384               # 12 x 24 patches of 16 px (round 40 member: 144 x 272 = 9 x 17)')):
+        assert src.count(old) == 1, old
+        src = src.replace(old, new)
+    nb.cells[1].source = src
+    k = next(i for i, c in enumerate(nb.cells) if c.cell_type == "code" and "DINOv3 compatibility check" in c.source)
+    assert nb.cells[k].source.count("(9 x 17 = 153 patches + class + registers)") == 1
+    nb.cells[k].source = nb.cells[k].source.replace("(9 x 17 = 153 patches + class + registers)", "(12 x 24 = 288 patches + class + registers)")
+nbf.write(nb, out_path)
+print("profile", PROFILE, "->", out_path)
 print("written", len(nb.cells), "cells")

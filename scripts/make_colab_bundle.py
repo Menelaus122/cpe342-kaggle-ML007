@@ -34,6 +34,7 @@ with zipfile.ZipFile(OUT / "cpe342_code.zip", "w", zipfile.ZIP_DEFLATED) as z:
         z.write(f, f.relative_to(ROOT).as_posix())
     for rel in ("scripts/train_task4.py", "experiments/claude/em_r30_t4_hardviews.py", "experiments/claude/fc_r31_t4_v23_eval.py",
                 "experiments/claude/gn_r38_t4_wiseft_full.py", "experiments/claude/gm_r38_t4_feat_extract.py",
+                "experiments/claude/gz_r40_t4_soup.py",
                 "scripts/train_task4_probe.py",
                 "requirements.txt", "experiments/claude/outputs/r27/t4_probe_views.npz", "experiments/claude/outputs/r30/t4_errors.npz"):
         z.write(ROOT / rel, rel)

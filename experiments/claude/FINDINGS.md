@@ -3065,3 +3065,195 @@ A100), bundle `colab/upload/cpe342_code.zip` rebuilt (35,108,929 bytes). Decisio
   error in any cell does the same after printing it (IPython `set_custom_exc`; an interrupt is not an error), so no compute units
   are spent idle. Checked locally with a fake `google.colab` module. Estimated cost of the seed-2 run: about 3.2 h on an A100,
   about 35-40 compute units (rate from memory, about 11-13 per hour; the Colab Resources panel shows the current rate).
+
+**Round 40, revised brief (2026-11-18 ~03:00), part 1: alpha and probe temperature for v30: FAIL** (`gy_r40_t4_temp_alpha.py`; rule
+fixed before the run). One temperature on the final mixture only rescales alpha (argmax of log p / T - alpha log pi), so the
+temperature was applied to the probe before mixing. 14 settings around v30's (alpha 0.75, T 1): every one is worse on at least one
+view; the closest, (1.0, 1.0), gains on the dark frames (+0.0010) but loses zoom70 / HUD (-0.0001 / -0.0003) and the training-mix
+score (0.9899 -> 0.9893); a sharper (T 0.5) or flatter (T 2) probe costs 0.001-0.004 on HUD hidden or the dark frames. N keeps v30
+in every fold: v30's alpha and mixing are still well calibrated after the probe and DINOv2-L were added.
+
+**Part 2, real dark / low-contrast oversampling (rule written while the runs trained, before any output was seen):** new trainer
+option `--dark-oversample K` (`scripts/train_task4.py`; `row_repeat` in `task4.train_fold`): training rows whose grey mean or SD is
+at or below the 10% quantile of THAT fold's training rows appear K times per epoch (epochs grow by about 10% per extra copy; off =
+unchanged, checked). cnxt_hud recipe + K 2 (`cnxt_hud_dark2`) and K 3 (`cnxt_hud_dark3`), fold 0, laptop GPU. Each is scored by
+`gw_r40_t4_lowlight_eval.py <tag>` (member alone against cnxt_hud on fold 0; v30 with cnxt_hud replaced, information). A recipe passes
+if the member-level deltas have real dark frames > 0, zoom70 > 0, HUD hidden > 0, full >= -0.0005; with two candidates on one seed and
+one fold, a pass is a reason for an all-fold run, not for the pipeline.
+
+**Part 3, DINOv3 notebook** (`python colab/build_t4_colab_nb.py dinov3` -> `colab/t4_colab_dinov3.ipynb`; the seed-2 notebook
+`colab/t4_colab_train.ipynb` is unchanged in behaviour, only H / W became settings). `vit_large_patch16_dinov3.lvd1689m` is in timm
+1.0.30 (the version Colab installs), not gated on the hub (timm mirror, DINOv3 licence, 1.2 GB); checked on the laptop CPU: 303 M
+parameters, 144 x 272 gives 158 tokens (9 x 17 patches + class + 4 registers, RoPE), backward and gradient checkpointing work, layer
+decay 0.85 gives 26 levels (24 blocks + embedding + head), ImageNet mean / std as the pipeline. Tag `dinov3L_hud70`, v30's recipe,
+GATE = True (v24 check after fold 0), AUTO_DISCONNECT; a compatibility cell (timm version, the model, one forward / backward step of 64
+at 144 x 272 with the peak memory) runs before the benchmark.
+**Weight soup for the seed-2 run:** `experiments/claude/gz_r40_t4_soup.py` (averages the two seeds' EMA checkpoints per fold and for
+the full refit, writes views / preds as `dinov2L_hud70_soup`), added as a cell of the seed-2 notebook and to the bundle;
+`gx_r40_t4_dinov2L_seed2_eval.py` now compares PA (probability mean) and WS (weight soup), nested, against v30 (extended before any
+seed-2 output existed).
+* **Part 2 result: FAIL for both** (fold 0, alone against cnxt_hud; 3,325 of 25,236 training rows oversampled; TTA macro-F1 0.9859
+  for both against cnxt_hud's 0.9852). x2: full +0.0013, zoom70 +0.0028, HUD hidden +0.0012, **real dark -0.0061**; x3: +0.0025 /
+  +0.0028 / +0.0024 / **-0.0015**. In v30 in place of cnxt_hud: x2 dark -0.0021, x3 HUD +0.0019 but full -0.0004 and dark -0.0009.
+  Oversampling the dark decile does not help the held-out dark decile (one seed, 835 dark frames: about 5 / 1 images), while the other
+  views gain (partly the 10-20% longer epochs). Not pursued.
+* `gz_r40_t4_soup.py` tested on the laptop with cnxt_hud and cnxt_hud_dark3 (fold 0, same pretrained start): writes the views and
+  preds files in the expected layout; the soup scores 0.9859 (the two runs: 0.9852 / 0.9859), so two fine-tuned runs of this
+  pipeline average without collapsing. Test outputs deleted.
+* Seed-2 run started on Colab by the user at about 02:50 (new bundle 35,112,092 bytes and notebook confirmed on Drive).
+* **Seed-2 result (2026-11-18 ~05:40): N FAILS; v30 stays** (`gx_r40_t4_dinov2L_seed2_eval.py`, log
+  `outputs/r40/gx_r40_seed2_eval.log`). Colab A100 80 GB, 85 s / epoch (no gradient checkpointing), folds done 03:09-04:43, full refit
+  05:12, soup 05:23. Seed 2 (`dinov2L_hud70_s2`, training seeds +1000, same folds) TTA macro-F1 by fold 0.9888 / 0.9887 / 0.9847 /
+  0.9877 / 0.9865 (seed 1: 0.9885 / 0.9889 / 0.9863 / 0.9859 / 0.9881). Files pulled through the Drive connector, sizes equal to Drive,
+  F1 equal to the Colab log, folds = pipeline, test order = seed 1, `cp -n` into place.
+  Alone over the five folds: seed 1 full 0.9870 / zoom70 0.9777 / HUD hidden 0.9620 / dark 0.9696; seed 2 0.9872 / 0.9768 / 0.9615 /
+  0.9701; **weight soup 0.9852 / 0.9734 / 0.9574 / 0.9678 (below both seeds on every fold and view)**: two fine-tunes with different
+  head initialisations and data orders are not in one linear basin here (the cnxt_hud test above shared the seed).
+  Against v30 (balanced mix): PA (probability mean) full +0.0001, zoom70 +0.0001, HUD hidden +0.0005, dark +0.0003, zoom / HUD
+  +5/5 folds, dark +0.0013 on fold 4 only and 0 elsewhere -> meets the rule in-sample; WS -0.0003 / -0.0004 / -0.0006 / -0.0002 ->
+  fails. N (per held-out fold, PA or WS if it meets the rule on the other four): picks PA, none, PA, PA, none -> full -0.0001, zoom70
+  -0.0001, HUD +0.0005, dark +0.0000 -> **fails** (on folds 1 and 4 held out, PA's dark delta on the other four folds is 0, not > 0).
+  The test declared before the run is N, so the second seed is not adopted; PA's in-sample gain (+0.0001 to +0.0005) is within the
+  noise of one public LB step either way. Seed 2 in place of seed 1 (information): fails (zoom70 -0.0001).
+* **DINOv3 ViT-L/16 fold 0 (2026-11-18 ~13:00-13:57 local, Colab): gate FAILS; folds 1-4 not run.** `dinov3L_hud70`, 144 x 272,
+  v30's recipe (lr 3e-5, layer decay 0.85, HUD dropout 0.70, 15 epochs), gradient checkpointing (A100 below 60 GB), 137 s / epoch.
+  TTA macro-F1 **0.9794** (DINOv2-L seed 1 / 2 on fold 0: 0.9885 / 0.9888); slower to converge (epoch 4: 0.904 against 0.965 for
+  DINOv2-L) and still rising at epoch 14 (0.9784 / 0.9791 / 0.9799). Files pulled through the Drive connector and checked (F1 equal to
+  the log, folds = pipeline, test order). `fc_r31_t4_v23_eval.py dinov3L_hud70` on the laptop (log `outputs/r40/fc_dinov3L_hud70_fold0.log`):
+  alone full 0.9805 / zoom70 0.9655 / HUD hidden 0.9481 / real dark 0.9629 (DINOv2-B 0.9855 / 0.9720 / 0.9568 / 0.9754); added to the
+  v23 members at weight 2 / 4 / 8 / in place of DINOv2-B: real dark **-0.0006 / -0.0024 / -0.0031 / -0.0050** -> v24 check fails in
+  every variant (gains only on the synthetic gamma and grid views). Rejected under the stopping rule; no learning-rate retune.
+* **DINOv3 set-up check (user brief 2026-11-18 afternoon; `hb_r40_t4_dinov3_check.py`, laptop GPU, log `outputs/r40/hb_dinov3_check.log`):
+  the set-up is right; the frozen features are clearly better than DINOv2-L's, so the fold-0 gap is the fine-tuning recipe.**
+  As `task4.create_model` builds it: pre-trained mean / std = the pipeline's ImageNet normalisation (both models), patch grid 9 x 17,
+  158 tokens (class + 4 registers + 153 patches), head Linear(1024, 5); the RoPE features of the fixed 144 x 272 model equal timm's
+  dynamic-size path exactly (max |diff| 0). One difference: DINOv3 pools by averaging the patch tokens (`global_pool 'avg'`),
+  DINOv2 takes the class token (`'token'`); not an error. Frozen logistic probe (the pipeline's, C 0.03), full frames, out of fold
+  (check: DINOv2-L @ 224 with gi_r37's recipe gives 0.9084 again):
+
+| frozen backbone @ input | full (balanced, rule) | real dark / low-contrast | plain macro-F1 |
+|---|---|---|---|
+| DINOv2-L @ 224 x 224 | 0.9172 | 0.8469 | 0.9162 |
+| DINOv3-L @ 224 x 224 | 0.9320 | 0.8625 | 0.9321 |
+| DINOv2-L @ 126 x 238 (v30 fine-tune geometry) | 0.9050 | 0.8318 | 0.9035 |
+| **DINOv3-L @ 144 x 272 (dinov3L fine-tune geometry)** | **0.9363** | **0.8716** | **0.9366** |
+
+  DINOv3-L minus DINOv2-L: +0.0148 at 224 x 224, +0.0313 at the fine-tune geometry (dark +0.0398). Reading fixed before the run:
+  set-up not the cause.
+* **DINOv3 second recipe, notebook prepared** (user brief 2026-11-18 afternoon; `python colab/build_t4_colab_nb.py dinov3b` ->
+  `colab/t4_colab_dinov3b.ipynb`; bundle 35,112,138 bytes with the `dinov3L_lr8e5` views entry): tag `dinov3L_lr8e5`, one recipe fixed
+  before the run: lr 8e-5, layer decay 0.90, 2 warm-up + 16 cosine epochs, otherwise as `dinov3L_hud70` (144 x 272, HUD dropout 0.70,
+  'avg' pooling kept: one change at a time). Fold 0 only (`FOLDS = [0]`, `DO_FULL = False`). Gate: alone >= 0.985 macro-F1 on fold 0
+  (`MIN_ALONE`, new setting; DINOv2-L 0.9885) and the v24 check against the v23 members; then a fold-0 comparison with v30 on the
+  laptop. Fail: DINOv3 fine-tuning closed. The builder's layer decay / epochs became settings (`LD`, `EPOCHS`; the seed-2 and first
+  DINOv3 notebooks are regenerated with the old values and behave as before).
+* In parallel on the laptop: `hc_r40_t4_probe_dinov3.py` (frozen DINOv3-L @ 144 x 272 added to v30's MLP probe; one candidate, P8 at
+  35% in place of P7, against v30 under the user's rule).
+* **DINOv3-L in v30's MLP probe: FAIL** (`hc_r40_t4_probe_dinov3.py`, log `outputs/r40/hc_probe_dinov3.log`, 41 min on the laptop).
+  Caches `outputs/preds/t4_feat[_views]_dinov3L_144x272.npz` (training full / zoom70 / HUD hidden, test full; the full-frame cache
+  equals a recomputation exactly). P7 recomputed = gs_r39's cache exactly. Probe alone (balanced mix, rule; full / zoom70 / HUD
+  hidden / real dark): P7 0.9724 / 0.9510 / 0.9321 / 0.9342; **P8 0.9766 / 0.9569 / 0.9350 / 0.9418**; DINOv3-L alone 0.9657 / 0.9366
+  / 0.8923 / 0.9220. In v30 (P8 in place of P7 at 35%): full +0.0005, zoom70 +0.0007, HUD hidden +0.0005 (zoom / HUD better in 5/5
+  folds), **real dark -0.0009** (by fold +0.0000 -0.0003 -0.0014 +0.0006 -0.0028) -> fails the rule. The stronger probe helps every
+  view alone, but inside the ensemble it moves the dark frames the wrong way. One pre-declared candidate; no weight search.
+* **dinov3L_lr8e5 fold 0 (Colab, 2026-11-18 ~15:10-15:57 local): 0.9925 -> gate PASS.** lr 8e-5 / layer decay 0.90 / 18 epochs,
+  137 s per epoch (gradient checkpointing on). Converges fast now (epoch 4: 0.9755 against 0.9044 at lr 3e-5) and passes DINOv2-L
+  (0.9885 / 0.9888) by +0.004. Notebook gate: alone >= 0.985 and the v24 check PASS in every variant (fc log: at weight 8 full +0.0023,
+  zoom70 +0.0055, HUD +0.0051, dark +0.0035 against the v23 members). Alone on fold 0 (balanced mix, rule) it is better than the whole
+  v30 ensemble on every view: full 0.9926 / zoom70 0.9848 / HUD hidden 0.9754 / real dark 0.9878 against v30's 0.9911 / 0.9794 /
+  0.9678 / 0.9859 (DINOv2-L alone 0.9884 / 0.9772 / 0.9614 / 0.9807). Fold-0 check against v30 (`hd_r40_t4_dinov3_fold0_v30.py`, fixed
+  before the run): R (in place of DINOv2-L, x8 / x2 gated) full +0.0002, zoom70 +0.0019, HUD +0.0041, dark +0.0013 -> PASS; A (next to
+  it) +0.0001 / +0.0032 / +0.0028 / +0.0013 -> PASS. The five-fold test is fixed now, before folds 1-4: `he_r40_t4_dinov3_eval.py`
+  (R, A, N nested over them against v30; U = no gate as information).
+* **dinov3L_lr8e5 five folds (Colab, 2026-11-18 ~16:10-19:11 local; full refit still running): N PASSES against v30 -> variant A.**
+  Folds (TTA) 0.9925 / 0.9922 / 0.9917 / 0.9928 / 0.9929 (DINOv2-L 0.9888 / 0.9887 / 0.9847 / 0.9877 / 0.9865). Staged files checked
+  before use (`scratchpad/tools/validate_dv3b.py`, `python -I`, no pickle): F1 equal to the log, val_idx = the pipeline's folds, test
+  order = DINOv2-L's, finite probabilities, views keys / shapes as DINOv2-L's. Notebook check against the v23 members (Colab log): all
+  weights PASS 5/5 folds; alone full 0.9925 / zoom70 0.9849 / HUD 0.9738 / dark_g35 0.9709 / grid75 0.9395 / real dark 0.9823 (dinov2_v2
+  0.9860 / 0.9725 / 0.9539 / 0.9408 / 0.8606 / 0.9676). Against v30 (`he_r40_t4_dinov3_eval.py`, fixed after fold 0 and before folds
+  1-4; log `outputs/r40/he_dinov3_lr8e5_eval.log`; v30 reference full 0.9910 / zoom70 0.9794 / HUD 0.9676 / dark 0.9805):
+
+| candidate | full | zoom70 | HUD hidden | real dark | zoom / HUD better | labels changed (full) | rule |
+|---|---|---|---|---|---|---|---|
+| R: in place of DINOv2-L (x8 / x2 gated) | +0.0009 | +0.0016 | +0.0029 | +0.0006 | 5/5 | 52 | PASS |
+| A: next to DINOv2-L (both x8 / x2 gated) | +0.0010 | +0.0023 | +0.0031 | +0.0012 | 5/5 | 45 | PASS |
+| **N: nested over R / A (picks A A A A A)** | **+0.0010** | **+0.0023** | **+0.0031** | **+0.0012** | **5/5** | 45 | **PASS** |
+| U (information): R without the gate (x8 everywhere) | +0.0012 | +0.0035 | +0.0035 | +0.0032 | 5/5 | 63 | (PASS) |
+
+  Dark by fold for A: +0.0013 +0.0013 +0.0007 +0.0000 +0.0025 (no fold below zero). Pipeline variant fixed by the pre-declared rule:
+  **A** (in-sample best criterion among R / A meeting the rule). U is not a candidate (not declared before the run; choosing it now
+  would be selection after seeing the folds), and neither is the notebook's "in place of dinov2_v2" pick (a check against the v23
+  members, not v30). The gains on training images are small (+0.001 full) and fold-consistent. Next: the full refit
+  (`t4_dinov3L_lr8e5_full.npz`) and, with the user's OK, a v31 pipeline run = v30 + dinov3L_lr8e5 next to DINOv2-L (x8 / x2 gated).
+
+**v30 -> v31 prepared (user go-ahead 2026-11-18 ~20:05, "full fit แล้วจัดการเลย"; not uploaded):** full refit fetched from Drive
+(`t4_dinov3L_lr8e5_full.npz`, 18 epochs, last loss 0.692; staged and checked: test order = DINOv2-L's, finite, argmax agreement with
+its own 5-fold mean 0.970) with the fold / full histories. `scripts/nb_part2.py`: `dinov3L_lr8e5` added to `T4_BACKBONES`, weight 8
+in `T4_MEMBER_W` and 2 in `T4_MEMBER_W_DARK` (candidate A, same gate). `task4/task4.ipynb` rebuilt and executed (log
+`outputs/r40/v31_task4_nb.log`).
+* **Side effect caught and pinned off: the Task 4 class multipliers.** The pipeline's round-18 check (multipliers vs plain argmax at
+  the training class mix, nested, keep if >= +0.0005) failed in every version up to v30 and passes for the first time with the new
+  member (argmax 0.991347 -> nested 0.991960, +0.000613; multipliers 7-11k 0.76, fiveN 0.95, freefried 1.11, pube 1.14, roblock
+  1.03, applied on top of pi^-0.75). The first build therefore changed 420 Task 4 labels, 170 of them out of 7-Eleven Knights
+  (kept only as `scratchpad/submission_v31_multipliers_on.csv`, not a candidate). Multipliers on top of the prior rule were never
+  tested under the acceptance rule, so `T4_CLASS_MULT = False` now keeps v30's decision rule; v17-v30 are unaffected (the check
+  failed there anyway).
+* Reproduction check: the same notebook with the new member removed gives v30's Task 4 labels exactly (0 of 25,889 differ).
+* Pipeline OOF (one gate threshold from all training images, as the pipeline): member-weighted 0.9913, + probe 0.9913; rule at the
+  training mix 0.9900 -> **0.9911**, balanced mix 0.9910 -> **0.9920**.
+* `submission_v31.csv` (sha256 19d62e48...c4ea11): **302 of 25,889 Task 4 labels change** (1.17%), spread over all class pairs
+  (largest pube -> freefried 44, 7-11k -> fiveN 40, fiveN -> roblock 33); Tasks 1, 2, 3, 5 identical to v30; `submission.csv` stays
+  v30. Predicted test shares v30 -> v31 (reported only; nothing chosen from them): 0.1394 / 0.2734 / 0.1434 / 0.2431 / 0.2007 ->
+  0.1376 / 0.2752 / 0.1438 / 0.2418 / 0.2016.
+* On the training images (he_r40 folds, A vs v30): full frames 45 labels change, 37 to correct, 6 from correct, 2 wrong to wrong;
+  zoom70 101 (74 / 15 / 12); HUD hidden 168 (118 / 31 / 19); real dark frames 6 (6 / 0).
+* Expectation stated before any upload: if the 302 test changes split like the hard views to the full frames (net 35-69% of the
+  changes), Task 4 gains about +0.004 to +0.008, i.e. +0.0008 to +0.0016 public at equal task weights: central about 0.8642, range
+  0.8630-0.8650 (public split noise included). v31 is kept on the nested evidence whatever its public score.
+
+**v31 = 0.86443 public (uploaded 2026-11-18 20:21 via the Kaggle CLI with the user's approval; ref 58511141): +0.00121 over v30**,
+inside the range stated before the upload (central about 0.8642, range 0.8630-0.8650). Best public score so far. `submission.csv` =
+v31; snapshot `versions/v31_LB0.86443/` (pruned as v30's to the tracked prediction files plus the six `t4_dinov3L_lr8e5_*` files,
+230 MB); README rows added. As with v30, the public gain is at the upper end of what the training-image flips imply: the two
+self-supervised ViT-L members are where the train / test shift is absorbed.
+
+## Round 41 (2026-11-18 evening; user brief after v31 = 0.86443)
+
+**Step 1, Task 4 re-weighting around DINOv3-L: N PASSES against v31** (`hg_r41_t4_reweight.py`, log `outputs/r41/hg_reweight.log`,
+CPU, under a minute). Grid fixed before the run, 48 settings: DINOv3-L weight {8, 12, 16, 20} x its weight on gated frames {2 (as
+v31), the same as on normal frames} x probe weight {0.35, 0.25, 0.20} x the seven older members scaled {1, 0.5}; DINOv2-B x8 and
+DINOv2-L x8 / x2 fixed; gate thresholds from the other four folds. v31 reference: full 0.9920, zoom70 0.9817, HUD 0.9707, dark 0.9816.
+* Nested picks: DINOv3 20 / ungated / probe 0.35 / older x0.5 in folds 0, 1, 3, 4; probe 0.20 in fold 2. **N against v31: full
+  +0.0008, zoom70 +0.0031, HUD hidden +0.0042, real dark +0.0015, zoom / HUD better in 5/5 folds -> PASS.** Dark frames by fold are
+  mixed: -0.0009 +0.0071 -0.0071 -0.0003 +0.0077 (the -0.0071 is fold 2's probe-0.20 pick). Pipeline setting (in-sample best meeting
+  the rule): DINOv3 x20 on every frame, older members x0.5, probe 0.35: full +0.0010, zoom70 +0.0031, HUD +0.0042, dark +0.0026
+  (by fold -0.0009 +0.0071 -0.0014 -0.0003 +0.0077).
+* One factor at a time (information): removing DINOv3's gate is the main lever (dark +0.0019 at x8); a larger DINOv3 weight helps
+  zoom / HUD only with the gate removed; a lower probe weight costs on dark frames (-0.0023 / -0.0024 at x8) and is rejected; halving
+  the older members helps a little everywhere. The pick sits at the grid's edge (DINOv3 x20, older x0.5): the grid was not extended
+  after the run (that would be a second, post-hoc search).
+* **v32 prepared** (not uploaded): `scripts/nb_part2.py` `T4_MEMBER_W` = DINOv2-B 8, ConvNeXt-T / DeiT-III 0.5, HUD members 1.5,
+  DINOv2-L 8 (2 gated), DINOv3-L 20 (20 gated); probe 0.35; multipliers stay pinned off (their check would fail anyway: nested
+  0.9928 vs argmax 0.9926). `task4/task4.ipynb` executed (log `outputs/r41/v32_task4_nb.log`): member-weighted OOF 0.9924, + probe
+  0.9926; rule at the training mix 0.9911 -> **0.9922**, balanced 0.9920 -> **0.9930**. `submission_v32.csv` (sha256
+  52884708...e9edf): **483 of 25,889 Task 4 labels change against v31** (1.87%, all class pairs; largest pube -> freefried 71,
+  roblock -> fiveN 57); Tasks 1, 2, 3, 5 identical; `submission.csv` stays v31.
+* OOF flips v31 -> v32 setting: full 81 (52 to correct / 20 from correct / 9 wrong to wrong), zoom70 215 (146 / 51 / 18), HUD 239
+  (160 / 47 / 32), real dark 31 (18 / 9).
+* Expectation stated before any upload: in-sample flips imply +0.0011 to +0.0018 public, but the setting was picked from 48 (nested
+  gains are smaller) and past re-weightings moved the public score by <= +0.0001 (v23 +0.00007, v29 +0.00005) where new members
+  moved it by +0.0012-0.0033. Central about 0.8648, range 0.8635-0.8662.
+
+**Step 2 prepared: DINOv3-L at 192 x 384** (`python colab/build_t4_colab_nb.py dinov3c` -> `colab/t4_colab_dinov3c.ipynb`; bundle
+`colab/upload/cpe342_code.zip` rebuilt, 35,112,175 bytes, with the `dinov3L_384` entry in `em_r30_t4_hardviews.py`). Tag
+`dinov3L_384`, v31's recipe (lr 8e-5, layer decay 0.90, 18 epochs, HUD dropout 0.70), 12 x 24 = 288 patches (checked on the laptop:
+grid (12, 24), 293 tokens, 'avg' pooling), gradient checkpointing always on, fold 0 only. Gate fixed before the run: alone >= 0.9925
+on fold 0 (= `dinov3L_lr8e5`'s fold 0) and the v24 check; then `hh_r41_t4_dinov3_384_fold0.py` against the pipeline in use (v31 or
+v32; variants R in place of dinov3L_lr8e5, H both at half its weights, A both at full weights; any variant meeting the fold-0 rule ->
+folds 1-4 worth running).
+
+**v32 = 0.86564 public (uploaded 2026-11-18 20:37 via the Kaggle CLI with the user's approval; ref 58511719): +0.00121 over v31**,
+inside the range stated before the upload (central about 0.8648, range 0.8635-0.8662), above the central estimate. Best public score
+so far. Unlike the earlier re-weightings (v23 +0.00007, v29 +0.00005), this one moved the public score as much as a new member: the
+weight moved onto the member that carries the train / test shift (DINOv3-L, ungated), not between members of similar strength.
+`submission.csv` = v32; snapshot `versions/v32_LB0.86564/` (pruned as v31's, 230 MB); README rows added.

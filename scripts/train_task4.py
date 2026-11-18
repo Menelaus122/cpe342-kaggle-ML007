@@ -42,6 +42,9 @@ def main():
     ap.add_argument("--p-lowlight", type=float, default=0.0,
                     help="round 40: near-black frame (brightness x0.05-0.30 or gamma 2-4) + Gaussian noise sd 0.05-0.15")
     ap.add_argument("--p-chshuffle", type=float, default=0.0, help="round 40: random RGB channel order")
+    ap.add_argument("--dark-oversample", type=int, default=1,
+                    help="round 40: training images whose grey mean or SD is at or below the 10%% quantile of the training rows "
+                         "appear K times per epoch (1 = off)")
     ap.add_argument("--train-seed-offset", type=int, default=0,
                     help="round 40: added to the training seeds only (the folds keep SEED), for a second run of a recipe")
     ap.add_argument("--p-jitter", type=float, default=None, help="colour jitter probability (default 0.5)")
@@ -83,6 +86,20 @@ def main():
     arr = task4.load_uint8(list(train.path))
     log(f"decoded {arr.shape} uint8 ({arr.nbytes / 1e9:.2f} GB) in {time.time() - t0:.0f}s")
     size = (args.h, args.w)
+    grey = np.zeros((len(arr), 2), np.float32)                       # round 40: (mean, SD) of the grey level per training image
+    if args.dark_oversample > 1:
+        for i in range(0, len(arr), 2048):
+            g = (arr[i:i + 2048].astype(np.float32) / 255) @ np.array([0.299, 0.587, 0.114], np.float32)
+            grey[i:i + 2048, 0], grey[i:i + 2048, 1] = g.mean((1, 2)), g.std((1, 2))
+
+    def repeats(rows):
+        """Copies per epoch of each training row: K for the dark / low-contrast decile of THESE rows, 1 otherwise (None = off)."""
+        if args.dark_oversample <= 1:
+            return None
+        thr = np.quantile(grey[rows], 0.10, axis=0)
+        dk = (grey[rows] <= thr).any(1)
+        log(f"dark oversampling x{args.dark_oversample}: {dk.sum()} of {len(rows)} training rows (thresholds {thr[0]:.3f}, {thr[1]:.3f})")
+        return np.where(dk, args.dark_oversample, 1)
 
     def lp_head(rows, name, va=None):
         """LP-FT: the probe head for these training rows (cached); with va, also the probe's own validation score (theta_0)."""
@@ -114,7 +131,8 @@ def main():
                                        bs=args.bs, lr=args.lr, seed=SEED + 100 + args.train_seed_offset, log=log,
                                        ckpt_path=MODEL_DIR / f"t4_{args.tag}_full.pt", aug_kw=aug_kw, grad_ckpt=args.grad_ckpt,
                                        layer_decay=args.layer_decay, warmup_epochs=args.warmup_epochs,
-                                       sam_rho=args.sam_rho, mixstyle_stages=args.mixstyle, accum=args.accum, init_head=init_head)
+                                       sam_rho=args.sam_rho, mixstyle_stages=args.mixstyle, accum=args.accum, init_head=init_head,
+                                       row_repeat=repeats(np.arange(len(y))))
         tp = task4.predict_paths(model, test.path.values, size, tta=True)
         np.savez_compressed(out_path, test_probs=tp, test_file_name=np.array(test.file_name.tolist(), dtype="U"))
         (log_dir / f"t4_{args.tag}_full_history.json").write_text(json.dumps(hist, indent=1))
@@ -132,7 +150,8 @@ def main():
                                        lr=args.lr, seed=SEED + f + args.train_seed_offset, log=log,
                                        ckpt_path=MODEL_DIR / f"t4_{args.tag}_fold{f}.pt", aug_kw=aug_kw, grad_ckpt=args.grad_ckpt,
                                        layer_decay=args.layer_decay, warmup_epochs=args.warmup_epochs,
-                                       sam_rho=args.sam_rho, mixstyle_stages=args.mixstyle, accum=args.accum, init_head=init_head)
+                                       sam_rho=args.sam_rho, mixstyle_stages=args.mixstyle, accum=args.accum, init_head=init_head,
+                                       row_repeat=repeats(tr))
         vp = task4.predict_array(model, arr[va], size, tta=True)
         tp = task4.predict_paths(model, test.path.values, size, tta=True)
         np.savez_compressed(out_path, val_idx=va, val_probs=vp, test_probs=tp,

@@ -110,6 +110,9 @@ T4_BACKBONES = {   # tag -> (timm model, input HxW) as trained by scripts/train_
     # round 39 (v30): DINOv2 ViT-L/14 at the native aspect ratio, trained on a Colab A100 with the same trainer and folds
     # (--lr 3e-5 --layer-decay 0.85 --warmup-epochs 2 --epochs 15 --p-hud 0.70 --grad-ckpt; colab/t4_colab_train.ipynb)
     "dinov2L_hud70": ("vit_large_patch14_reg4_dinov2.lvd142m", (126, 238)),
+    # round 40 (v31): DINOv3 ViT-L/16 (LVD-1689M) at 144x272 (9x17 patches), same trainer and folds on a Colab A100
+    # (--lr 8e-5 --layer-decay 0.90 --warmup-epochs 2 --epochs 18 --p-hud 0.70 --grad-ckpt; colab/t4_colab_dinov3b.ipynb)
+    "dinov3L_lr8e5": ("vit_large_patch16_dinov3.lvd1689m", (144, 272)),
 }
 fold_done = lambda tag: all((C.PRED_DIR / f"t4_{tag}_fold{f}.npz").exists() for f in range(N_FOLDS))
 if not fold_done("cnxt") and RUN_T4_TRAINING:
@@ -700,8 +703,16 @@ pf["OOF (all folds)"] = [macro_f1(y4, oof_tag[t].argmax(1)) for t in pf.index]
 # gu_r39_t4_gated.py, 12 settings, rule fixed before the run): the same setting in all five folds; against v29 full +0.0003, 70% zoom
 # +0.0011, HUD hidden +0.0017, real dark frames +0.0006, zoom / HUD better in 5/5 folds. Without the gate the member at weight 8 lifts
 # zoom / HUD but costs on the dark frames (gt_r39_t4_dinov2L_eval.py).
-T4_MEMBER_W = {"dinov2_v2": 8.0, "cnxt_hud": 3.0, "cnxt22k_hud": 3.0, "effv2_hud": 3.0, "deit3_hud": 3.0, "cnxtS_hud": 3.0,
-               "dinov2L_hud70": 8.0}
+# Round 40 (v31): the DINOv3-L member next to DINOv2-L with the same gate weights (8 / 2). Candidates fixed after its fold 0 and before
+# folds 1-4 (experiments/claude/he_r40_t4_dinov3_eval.py): in place of DINOv2-L or next to it, chosen nested -> next to it in all five
+# folds; against v30 full +0.0010, 70% zoom +0.0023, HUD hidden +0.0031, real dark frames +0.0012, zoom / HUD better in 5/5 folds.
+# Round 41 (v32): weights re-balanced around DINOv3-L (experiments/claude/hg_r41_t4_reweight.py, 48 settings fixed before the run,
+# chosen nested; the same setting in four folds, probe 0.20 in the fifth): DINOv3-L x20 on every frame (no gate: alone it is the best
+# member on the real dark frames too), the seven older members halved (ConvNeXt-T / DeiT-III 0.5, HUD-dropout members 1.5), probe
+# unchanged at 0.35. Against v31: full +0.0008, 70% zoom +0.0031, HUD hidden +0.0042, real dark frames +0.0015, zoom / HUD better
+# in 5/5 folds (dark frames by fold mixed: -0.0009 +0.0071 -0.0071 -0.0003 +0.0077).
+T4_MEMBER_W = {"dinov2_v2": 8.0, "cnxt": 0.5, "deit3": 0.5, "cnxt_hud": 1.5, "cnxt22k_hud": 1.5, "effv2_hud": 1.5, "deit3_hud": 1.5,
+               "cnxtS_hud": 1.5, "dinov2L_hud70": 8.0, "dinov3L_lr8e5": 20.0}
 T4_MEMBER_W_DARK = {**T4_MEMBER_W, "dinov2L_hud70": 2.0}
 GATE_Q4 = 0.10
 
@@ -766,7 +777,12 @@ for f in range(N_FOLDS):
     nest4[va_] = apply_class_weights(oof4[va_], optimize_class_weights(y4[tr_], oof4[tr_])[0])
 print(f"OOF macro-F1 argmax {base4:.4f} -> with class multipliers {SCORE4:.4f} in-sample, {macro_f1(y4, nest4):.4f} nested "
       f"| accuracy {(oof4.argmax(1) == y4).mean():.4f}")
-if macro_f1(y4, nest4) - base4 < 0.0005:   # keep the multipliers only if they survive the nested check
+# Round 40 (v31): Task 4 multipliers pinned off. This check compares them with plain argmax at the training class mix, without the
+# balanced-prior rule used since v17; it failed in every version up to v30 and passes for the first time with the DINOv3-L member
+# (+0.0006 nested, multipliers 0.76 for 7-Eleven Knights, 0.95-1.14 for the others). Multipliers on top of the prior rule were never
+# tested under the acceptance rule (hard views, dark frames), so v31 keeps v30's decision rule and changes only the members.
+T4_CLASS_MULT = False
+if not T4_CLASS_MULT or macro_f1(y4, nest4) - base4 < 0.0005:   # keep the multipliers only if enabled and they survive the nested check
     W4, SCORE4 = np.ones(5), base4
 # Balanced-prior decision rule (logit adjustment, Menon et al., 2021): y = argmax_c p_c * pi_c^-alpha. Training is 39% 7-Eleven Knights,
 # so an ambiguous frame falls back to that class; macro-F1 weighs the five classes equally. alpha is fixed from training images only:
@@ -795,7 +811,7 @@ for i, v in enumerate(pc4[::-1]):
     axes[1].text(v, i, f" {v:.4f}", va="center", fontsize=8.5)
 axes[1].set_xlim(0.9, 1.0); axes[1].set_title("Per-class F1 (OOF)")
 plt.tight_layout(); savefig(fig, "t4_confusion"); plt.show()
-summary.append(["Task 4", "macro-F1", SCORE4, f"{' + '.join(T4_TAGS)} 5-fold, GPU aug + Mixup/CutMix, EMA, h-flip TTA{', brightness / contrast gate for DINOv2-L (x8 / x2)' if 'dinov2L_hud70' in T4_TAGS else ''}{f' + {PROBE_W4:.0%} frozen-feature probe' if HAS_PROBE4 else ''}, balanced-prior rule (alpha 0.75)"])
+summary.append(["Task 4", "macro-F1", SCORE4, f"{' + '.join(T4_TAGS)} 5-fold, GPU aug + Mixup/CutMix, EMA, h-flip TTA{', brightness / contrast gate for DINOv2-L (x8 / x2)' if 'dinov2L_hud70' in T4_TAGS else ''}{', DINOv3-L x20 on every frame' if 'dinov3L_lr8e5' in T4_TAGS else ''}{f' + {PROBE_W4:.0%} frozen-feature probe' if HAS_PROBE4 else ''}, balanced-prior rule (alpha 0.75)"])
 """)
 code(r"""
 # Diversity of the members on held-out TRAINING images: pairwise agreement of their OOF labels (test images are not used)

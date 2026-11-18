@@ -370,7 +370,7 @@ def set_head(model, head):
 def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epochs=10, bs=64,
                lr=2e-4, wd=0.05, label_smoothing=0.1, mix_prob=0.8, seed=42, log=print, ckpt_path=None, aug_kw=None,
                class_balanced=False, layer_decay=None, grad_ckpt=False, warmup_epochs=1, sam_rho=0.0, mixstyle_stages=0, accum=1,
-               init_head=None):
+               init_head=None, row_repeat=None):
     """Train one fold on the shared preloaded uint8 array `arr` (rows tr_idx); returns
     (model carrying the final EMA weights, history). With an empty `va_idx` it trains on all given
     rows without per-epoch validation (final Train+Val refit). class_balanced=True draws each epoch's rows with
@@ -429,7 +429,9 @@ def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epo
         for g in groups:                        # torch schedulers ignore timm's lr_scale, so bake it into lr
             g["lr"] = lr * g.pop("lr_scale", 1.0)
         opt = torch.optim.AdamW(groups, lr=lr, weight_decay=wd)
-    n_steps_ep = len(tr_idx) // bs
+    # round 40: row_repeat (ints aligned with tr_idx) repeats rows within each epoch (oversampling); None = every row once
+    rep_idx = np.repeat(tr_idx, row_repeat) if row_repeat is not None else tr_idx
+    n_steps_ep = len(rep_idx) // bs
     steps, warm = epochs * n_steps_ep, warmup_epochs * n_steps_ep      # linear warm-up, then cosine (default: 1 epoch)
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda s: (s + 1) / warm if s < warm else 0.5 * (1 + math.cos(math.pi * (s - warm) / max(1, steps - warm))))
@@ -444,7 +446,7 @@ def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epo
             w = 1.0 / np.bincount(labels[tr_idx], minlength=5)[labels[tr_idx]]
             perm = rng.choice(tr_idx, size=len(tr_idx), replace=True, p=w / w.sum())
         else:
-            perm = rng.permutation(tr_idx)
+            perm = rng.permutation(rep_idx)
         for b in range(n_steps_ep):
             idx = np.sort(perm[b * bs:(b + 1) * bs])
             opt.zero_grad(set_to_none=True)

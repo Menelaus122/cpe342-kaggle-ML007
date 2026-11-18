@@ -41,7 +41,12 @@ ARCH = {"cnxt": ("convnext_tiny.in12k_ft_in1k", (160, 320)), "deit3": ("deit3_sm
         "dinov2L_lpft": ("vit_large_patch14_reg4_dinov2.lvd142m", (126, 238)),  # round 38: LP-FT (Colab)
         "dinov2L_hud70": ("vit_large_patch14_reg4_dinov2.lvd142m", (126, 238)),  # round 39 step 3: HUD dropout 0.70, lr 3e-5 (Colab)
         "cnxt_hud_lowlight": ("convnext_tiny.in12k_ft_in1k", (160, 320)),  # round 40: + low-light / noise and RGB channel shuffle
-        "dinov2L_hud70_s2": ("vit_large_patch14_reg4_dinov2.lvd142m", (126, 238))}  # round 40 step 3: second seed of dinov2L_hud70
+        "dinov2L_hud70_s2": ("vit_large_patch14_reg4_dinov2.lvd142m", (126, 238)),  # round 40 step 3: second seed of dinov2L_hud70
+        "cnxt_hud_dark2": ("convnext_tiny.in12k_ft_in1k", (160, 320)),   # round 40 (revised): real dark / low-contrast rows x2
+        "cnxt_hud_dark3": ("convnext_tiny.in12k_ft_in1k", (160, 320)),   # ... x3
+        "dinov3L_hud70": ("vit_large_patch16_dinov3.lvd1689m", (144, 272)),
+        "dinov3L_lr8e5": ("vit_large_patch16_dinov3.lvd1689m", (144, 272)),  # round 40: DINOv3-L, lr 8e-5 / layer decay 0.90 / 18 epochs
+        "dinov3L_384": ("vit_large_patch16_dinov3.lvd1689m", (192, 384))}  # round 41: the same recipe at 192 x 384  # round 40 (revised): DINOv3 ViT-L/16, 9 x 17 patches
 V20 = ["cnxt", "deit3", "cnxt_hud", "cnxt22k_hud", "effv2_hud", "deit3_hud", "cnxtS_hud", "dinov2_v2"]
 MEMBER_W = {"dinov2_v2": 3.0}
 REPLACES = {"dinov2_r2": "dinov2_v2", "dinov2_sam": "dinov2_v2", "dinov2_photo": "dinov2_v2", "dinov2L": "dinov2_v2", "dinov2L_lpft": "dinov2_v2", "dinov2L_hud70": "dinov2_v2"}
