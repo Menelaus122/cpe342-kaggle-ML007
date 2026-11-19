@@ -256,7 +256,71 @@ NATIVE_NORM = {"vit_base_patch16_siglip_224.v2_webli", "vit_base_patch16_siglip_
                "eva02_base_patch14_448.mim_in22k_ft_in22k_in1k"}       # round 28 (CLIP mean / std in its pre-trained config)
 
 
+# Round 42: NVIDIA C-RADIO (Hugging Face, trust_remote_code; not in timm 1.0.30). Pipeline name -> (repo, revision pinned to the code
+# that was read before it was first run). Needs transformers, einops and open_clip_torch (the transformers loader checks that the
+# repo's optional open_clip adaptor can import; it is never used here).
+RADIO_MODELS = {"c-radio_v3-l": ("nvidia/C-RADIOv3-L", "9d0413465e8a91e67bbf2c1ad342815478d1b906")}
+
+
+class RadioClassifier(nn.Module):
+    """C-RADIO backbone + Linear(summary -> classes).
+
+    Input: the pipeline feeds ImageNet-normalised tensors everywhere (GPUAugment, predict_array); RADIO was trained on [0, 1] RGB
+    and normalises inside (its InputConditioner, OpenAI CLIP mean / std). forward() therefore maps the input back to [0, 1] exactly
+    before the backbone, so the backbone sees [0, 1] images and its own normalisation only (no double normalisation).
+    Head: Linear on RADIO's `summary` (the class tokens of the CLIP, SigLIP 2 and DINOv2 teachers, 3 x 1024 = 3072 for the L model),
+    the embedding of the frozen probe in experiments/claude/ia_r42_t4_radio_frozen.py.
+    Training hooks used by train_fold: stochastic depth 0 -> drop_path over the 24 blocks (as timm's drop_path_rate);
+    set_grad_checkpointing -> the inner timm ViT (RADIO's CPE forward runs timm.checkpoint_seq over its blocks); group_matcher ->
+    layer-wise lr decay with the CPE patch generator as the stem (timm's own ViT matcher does not know it), blocks 0-23, final norm
+    and head on top."""
+
+    def __init__(self, name, num_classes=5, pretrained=True, drop_path=0.1):
+        super().__init__()
+        from timm.layers import DropPath, trunc_normal_
+        from transformers import AutoConfig, AutoModel
+        repo, rev = RADIO_MODELS[name]
+        if pretrained:
+            self.radio = AutoModel.from_pretrained(repo, trust_remote_code=True, revision=rev)
+        else:
+            cfg = AutoConfig.from_pretrained(repo, trust_remote_code=True, revision=rev)
+            self.radio = AutoModel.from_config(cfg, trust_remote_code=True)
+        vit = self.radio.radio_model.model
+        if getattr(vit, "reg_token", None) is not None:   # timm's leftover; the CPE patch generator carries the class + register tokens
+            vit.reg_token.requires_grad_(False)           # (never used in the forward pass: no gradient, kept out of the optimiser)
+        for blk, p in zip(vit.blocks, torch.linspace(0, drop_path, len(vit.blocks)).tolist()):
+            blk.drop_path1 = DropPath(p) if p > 0 else nn.Identity()
+            blk.drop_path2 = DropPath(p) if p > 0 else nn.Identity()
+        n_sum = self.radio.radio_model.summary_idxs.numel()
+        self.num_features = vit.embed_dim * n_sum
+        self.head = nn.Linear(self.num_features, num_classes)
+        trunc_normal_(self.head.weight, std=0.02)
+        nn.init.zeros_(self.head.bias)
+        self.register_buffer("in_mean", torch.tensor(MEAN).view(1, 3, 1, 1), persistent=False)
+        self.register_buffer("in_std", torch.tensor(STD).view(1, 3, 1, 1), persistent=False)
+
+    def forward_summary(self, x):
+        summary, _ = self.radio.radio_model(x * self.in_std + self.in_mean)     # ImageNet-normalised -> [0, 1]
+        return summary
+
+    def forward(self, x):
+        return self.head(self.forward_summary(x))
+
+    def get_classifier(self):
+        return self.head
+
+    def set_grad_checkpointing(self, enable=True):
+        self.radio.radio_model.model.set_grad_checkpointing(enable)
+
+    def group_matcher(self, coarse=False):
+        p = r"^radio\.radio_model\.model\."
+        return dict(stem=p + r"(?:patch_generator|cls_token|reg_token|pos_embed|patch_embed)",   # non-capturing: timm reads groups as ordinals
+                    blocks=[(p + r"blocks\.(\d+)", None), (p + r"norm", (99999,))])
+
+
 def create_model(name, num_classes=5, pretrained=True, drop_path=0.1, img_size=None):
+    if name in RADIO_MODELS:        # any input that is a multiple of 16 runs natively (192 x 384 -> 12 x 24 patches); img_size unused
+        return RadioClassifier(name, num_classes=num_classes, pretrained=pretrained, drop_path=drop_path)
     import timm
     kw = {}
     if img_size is not None and name.split("_")[0] in ("vit", "deit3", "deit", "eva02", "swin", "swinv2"):

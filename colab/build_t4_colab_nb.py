@@ -4,8 +4,10 @@ import sys
 import nbformat as nbf
 
 PROFILE = sys.argv[1] if len(sys.argv) > 1 else "seed2"     # seed2 -> colab/t4_colab_train.ipynb; dinov3 -> colab/t4_colab_dinov3.ipynb;
-assert PROFILE in ("seed2", "dinov3", "dinov3b", "dinov3c"), PROFILE   # dinov3b -> colab/t4_colab_dinov3b.ipynb (DINOv3 at lr 8e-5, fold 0
-# only); dinov3c -> colab/t4_colab_dinov3c.ipynb (round 41: the same DINOv3 recipe at 192 x 384, fold 0 only)
+assert PROFILE in ("seed2", "dinov3", "dinov3b", "dinov3c", "radio3", "dinov3h"), PROFILE   # dinov3b -> colab/t4_colab_dinov3b.ipynb (DINOv3 at lr 8e-5,
+# fold 0 only); dinov3c -> colab/t4_colab_dinov3c.ipynb (round 41: the same DINOv3 recipe at 192 x 384, fold 0 only); radio3 ->
+# colab/t4_colab_radio3.ipynb (round 42: NVIDIA C-RADIOv3-L at 192 x 384 with the dinov3c recipe, fold 0 only); dinov3h ->
+# colab/t4_colab_dinov3h.ipynb (round 42: DINOv3 ViT-H+/16 at 144 x 272 with the dinov3b recipe, fold 0 only)
 
 nb = nbf.v4.new_notebook()
 md = lambda s: nb.cells.append(nbf.v4.new_markdown_cell(s.strip("\n")))
@@ -343,7 +345,7 @@ if TRAIN and TAG == "dinov2L_hud70_s2":
 """.strip("\n"))
     k = next(i for i, c in enumerate(nb.cells) if c.cell_type == "code" and c.source.lstrip().startswith("# ---- what to copy back"))
     nb.cells.insert(k, soup_cell)
-if PROFILE in ("dinov3", "dinov3b", "dinov3c"):
+if PROFILE in ("dinov3", "dinov3b", "dinov3c", "radio3", "dinov3h"):
     out_path = "colab/t4_colab_dinov3.ipynb"
     nb.cells[0].source = nb.cells[0].source.replace(
         "# CPE342 Task 4: GPU training on Colab (round 40 step 3: a second seed of the v30 DINOv2-L member; all folds + full refit)",
@@ -393,7 +395,7 @@ torch.cuda.empty_cache()
 """.strip("\n"))
     k = next(i for i, c in enumerate(nb.cells) if c.cell_type == "code" and c.source.lstrip().startswith("# ---- 1-epoch benchmark"))
     nb.cells.insert(k, check)
-if PROFILE in ("dinov3b", "dinov3c"):
+if PROFILE in ("dinov3b", "dinov3c", "radio3", "dinov3h"):
     out_path = "colab/t4_colab_dinov3b.ipynb"
     nb.cells[0].source = nb.cells[0].source.replace(
         "# CPE342 Task 4: GPU training on Colab (round 40, revised: DINOv3 ViT-L/16 with v30's recipe; fold 0 + gate, then folds 1-4 + full refit)",
@@ -419,7 +421,7 @@ if PROFILE in ("dinov3b", "dinov3c"):
         assert src.count(old) == 1, old
         src = src.replace(old, new)
     nb.cells[1].source = src
-if PROFILE == "dinov3c":
+if PROFILE in ("dinov3c", "radio3"):
     out_path = "colab/t4_colab_dinov3c.ipynb"
     nb.cells[0].source = nb.cells[0].source.replace(
         "# CPE342 Task 4: GPU training on Colab (round 40: DINOv3 ViT-L/16, new recipe lr 8e-5 / layer decay 0.90 / 18 epochs; fold 0 only)",
@@ -447,6 +449,108 @@ if PROFILE == "dinov3c":
     k = next(i for i, c in enumerate(nb.cells) if c.cell_type == "code" and "DINOv3 compatibility check" in c.source)
     assert nb.cells[k].source.count("(9 x 17 = 153 patches + class + registers)") == 1
     nb.cells[k].source = nb.cells[k].source.replace("(9 x 17 = 153 patches + class + registers)", "(12 x 24 = 288 patches + class + registers)")
+if PROFILE == "radio3":
+    out_path = "colab/t4_colab_radio3.ipynb"
+    nb.cells[0].source = nb.cells[0].source.replace(
+        "# CPE342 Task 4: GPU training on Colab (round 41: DINOv3 ViT-L/16 at 192x384 with v31's recipe; fold 0 only)",
+        "# CPE342 Task 4: GPU training on Colab (round 42: NVIDIA C-RADIOv3-L at 192x384 with the DINOv3 recipe; fold 0 only)\n\n"
+        "**This notebook (user brief of 2026-11-19, after v33):** NVIDIA **C-RADIOv3-L** (`nvidia/C-RADIOv3-L`, 320 M parameters, a "
+        "ViT-L/16 distilled from CLIP ViT-H, SigLIP 2-SO400M, DINOv2-g and SAM-H; NVIDIA Open Model License), loaded from the Hugging "
+        "Face hub with `trust_remote_code` at a pinned revision (the repo code was read on the laptop first). Frozen at 192x384 its "
+        "summary embedding beat frozen DINOv3-L by +0.0143 (full) and +0.0195 (real dark frames) in a logistic probe "
+        "(`experiments/claude/ia_r42_t4_radio_frozen.py`). Pipeline name `c-radio_v3-l` (`src/task4.RadioClassifier`): the model sees "
+        "[0, 1] images and normalises them itself (CLIP mean / std; the wrapper undoes the pipeline's ImageNet normalisation exactly), "
+        "head Linear(3072 -> 5) on the summary, stochastic depth 0-0.1, layer decay with the CPE patch generator as the stem, gradient "
+        "checkpointing through RADIO's own block loop; smoke-tested on the laptop (`ic_r42_t4_radio_smoke.py`). **Recipe = dinov3c's, "
+        "fixed before the run:** 192x384 (12 x 24 patches), lr 8e-5, layer decay 0.90, 2 warm-up + 16 cosine epochs, HUD dropout 0.70, "
+        "batch 64, gradient checkpointing on. Tag `cradio3L_384`. **Fold 0 only** (`FOLDS = [0]`, `DO_FULL = False`; about 1.2-1.5 h on "
+        "an A100, the benchmark cell prints the estimate). Gate, fixed before the run: the member alone >= **0.9925** macro-F1 on fold 0 "
+        "(`MIN_ALONE`, the bar of the DINOv3 members) **and** the v24 check against the v23 members; then, on the laptop, the fold-0 "
+        "comparison with v33 (`experiments/claude/hj_r42_t4_radio_fold0.py`, variants fixed before the run). If it fails: stop. If it "
+        "passes and the user goes on: `FOLDS = [0, 1, 2, 3, 4]`, `DO_FULL = True`, *Run all* (fold 0 reused from Drive). Extra packages: "
+        "transformers, einops, open_clip_torch (the transformers loader checks the repo's optional open_clip adaptor imports; it is not "
+        "used). The sections below describe the earlier runs.")
+    src = nb.cells[1].source
+    for old, new in (('TAG = "dinov3L_384"', 'TAG = "cradio3L_384"'),
+                     ('MODEL = "vit_large_patch16_dinov3.lvd1689m"', 'MODEL = "c-radio_v3-l"            # src/task4.RADIO_MODELS -> nvidia/C-RADIOv3-L @ 9d041346'),
+                     ('H, W = 192, 384               # 12 x 24 patches of 16 px (round 40 member: 144 x 272 = 9 x 17)',
+                      'H, W = 192, 384               # 12 x 24 patches of 16 px (native: RADIO takes any multiple of 16)')):
+        assert src.count(old) == 1, old
+        src = src.replace(old, new)
+    nb.cells[1].source = src
+    k = next(i for i, c in enumerate(nb.cells) if c.cell_type == "code" and c.source.lstrip().startswith("# ---- packages"))
+    assert nb.cells[k].source.count("!pip -q install timm==1.0.30") == 1
+    nb.cells[k].source = (nb.cells[k].source
+                          .replace("!pip -q install timm==1.0.30", "!pip -q install timm==1.0.30 transformers==5.23.0 einops==0.8.2 open_clip_torch==4.2.2")
+                          .replace("import numpy, pandas, sklearn, timm, torch, torchvision", "import numpy, pandas, sklearn, timm, torch, torchvision, transformers")
+                          .replace('"| timm", timm.__version__,', '"| timm", timm.__version__, "| transformers", transformers.__version__,'))
+    k = next(i for i, c in enumerate(nb.cells) if c.cell_type == "code" and "DINOv3 compatibility check" in c.source)
+    nb.cells[k].source = r"""
+# ---- C-RADIOv3-L compatibility check: load (pinned revision, downloads 1.3 GB), one forward / backward step at H x W -------------
+import sys
+import torch
+import torch.utils.checkpoint as tuc
+sys.path.insert(0, str(R))
+from src import task4
+BS_CHECK = 64
+print("pipeline name", MODEL, "->", task4.RADIO_MODELS[MODEL])
+torch.cuda.empty_cache()
+torch.cuda.reset_peak_memory_stats()
+m = task4.create_model(MODEL, img_size=(H, W)).cuda().eval()
+x = torch.rand(BS_CHECK, 3, H, W, device="cuda")
+with torch.no_grad():   # eval mode: no stochastic depth, so both passes are deterministic (train mode drops blocks at random)
+    s_wrap, (s_own, _) = m.forward_summary(task4.normalize(x[:2])), m.radio.radio_model(x[:2])
+diff = (s_wrap - s_own).abs().max().item()
+_orig_ckpt, n_ckpt = tuc.checkpoint, [0]
+def _counting_ckpt(fn, *a, **k):     # RADIO's CPE forward -> timm.checkpoint_seq -> one checkpoint call per block
+    n_ckpt[0] += 1
+    return _orig_ckpt(fn, *a, **k)
+tuc.checkpoint = _counting_ckpt
+m.train()
+if GRAD_CKPT:
+    m.set_grad_checkpointing(True)
+with torch.autocast("cuda", dtype=torch.bfloat16):
+    out = m(task4.normalize(x))
+out.float().sum().backward()
+tuc.checkpoint = _orig_ckpt
+pg = next(m.radio.radio_model.model.patch_generator.parameters())
+n_blocks = len(m.radio.radio_model.model.blocks)
+print(f"logits {tuple(out.shape)}, summary {tuple(s_wrap.shape)}; wrapper vs RADIO on [0, 1] (eval mode) max |diff| {diff:.1e}; "
+      f"checkpointed segments per step {n_ckpt[0]} of {n_blocks} blocks; patch-generator grad finite {torch.isfinite(pg.grad).all().item()}; "
+      f"peak GPU memory for a batch of {BS_CHECK} {torch.cuda.max_memory_allocated() / 2**30:.1f} GiB")
+assert diff < 1e-3, f"wrapper and RADIO disagree on the same image: {diff}"
+assert n_ckpt[0] == (n_blocks if GRAD_CKPT else 0), f"gradient checkpointing: {n_ckpt[0]} segments"
+del m, out, x
+torch.cuda.empty_cache()
+""".strip("\n")
+if PROFILE == "dinov3h":
+    out_path = "colab/t4_colab_dinov3h.ipynb"
+    nb.cells[0].source = nb.cells[0].source.replace(
+        "# CPE342 Task 4: GPU training on Colab (round 40: DINOv3 ViT-L/16, new recipe lr 8e-5 / layer decay 0.90 / 18 epochs; fold 0 only)",
+        "# CPE342 Task 4: GPU training on Colab (round 42: DINOv3 ViT-H+/16 at 144x272 with the dinov3b recipe; fold 0 only)\n\n"
+        "**This notebook (user brief of 2026-11-19):** `vit_huge_plus_patch16_dinov3.lvd1689m` (DINOv3 ViT-H+/16, 841 M parameters, 32 "
+        "blocks, 1280-d, RoPE, 4 registers; timm 1.0.30, ImageNet mean / std, DINOv3 licence) at **144x272** = 9 x 17 patches, the "
+        "geometry of v31's `dinov3L_lr8e5`. Chosen by a frozen-probe screen on the laptop aimed at the real dark / low-contrast frames "
+        "(`experiments/claude/id_r42_t4_dark_screen.py`, rule fixed before the run): frozen ViT-H+ beat frozen DINOv3-L at the same "
+        "geometry by +0.0123 (full) and +0.0211 (real dark frames); frozen ConvNeXt-L DINOv3 and ConvNeXt V2-L were far behind. **Recipe "
+        "= dinov3b's, unchanged (one change at a time):** lr 8e-5, layer decay 0.90 (over 32 blocks: block 0 at 0.034 of the head's lr), "
+        "2 warm-up + 16 cosine epochs, HUD dropout 0.70, batch 64, 'avg' pooling, **gradient checkpointing always on** (about 16 GiB of "
+        "training state; needs an A100). Tag `dinov3Hp_144`. **Fold 0 only** (`FOLDS = [0]`, `DO_FULL = False`; the benchmark cell prints "
+        "the estimate). Gate, fixed before the run: alone >= **0.9925** macro-F1 on fold 0 (`MIN_ALONE`, `dinov3L_lr8e5`'s fold 0) **and** "
+        "the v24 check against the v23 members; then, on the laptop, the fold-0 comparison with v33 "
+        "(`experiments/claude/hl_r42_t4_dinov3h_fold0.py`, variants fixed before the run). Caveat known before the run: C-RADIOv3-L led "
+        "frozen on the dark frames too and was weaker there after fine-tuning. The sections below describe the earlier runs.")
+    src = nb.cells[1].source
+    for old, new in (('TAG = "dinov3L_lr8e5"', 'TAG = "dinov3Hp_144"'),
+                     ('MODEL = "vit_large_patch16_dinov3.lvd1689m"', 'MODEL = "vit_huge_plus_patch16_dinov3.lvd1689m"'),
+                     ('MIN_ALONE = 0.985', 'MIN_ALONE = 0.9925'),
+                     ('GRAD_CKPT = "auto"            # gradient checkpointing changes memory only, not the result: auto = on below 60 GB of GPU memory',
+                      'GRAD_CKPT = True              # always on for ViT-H+ (841 M parameters); changes memory only, not the result'),
+                     ('MODELS_ON_DRIVE = True        # 1.2 GB per checkpoint (about 6 GB in all)',
+                      'MODELS_ON_DRIVE = True        # 3.4 GB per checkpoint for ViT-H+ (fold 0 only here)')):
+        assert src.count(old) == 1, old
+        src = src.replace(old, new)
+    nb.cells[1].source = src
 nbf.write(nb, out_path)
 print("profile", PROFILE, "->", out_path)
 print("written", len(nb.cells), "cells")

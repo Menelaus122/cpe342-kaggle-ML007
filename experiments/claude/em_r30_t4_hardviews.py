@@ -46,7 +46,9 @@ ARCH = {"cnxt": ("convnext_tiny.in12k_ft_in1k", (160, 320)), "deit3": ("deit3_sm
         "cnxt_hud_dark3": ("convnext_tiny.in12k_ft_in1k", (160, 320)),   # ... x3
         "dinov3L_hud70": ("vit_large_patch16_dinov3.lvd1689m", (144, 272)),
         "dinov3L_lr8e5": ("vit_large_patch16_dinov3.lvd1689m", (144, 272)),  # round 40: DINOv3-L, lr 8e-5 / layer decay 0.90 / 18 epochs
-        "dinov3L_384": ("vit_large_patch16_dinov3.lvd1689m", (192, 384))}  # round 41: the same recipe at 192 x 384  # round 40 (revised): DINOv3 ViT-L/16, 9 x 17 patches
+        "dinov3L_384": ("vit_large_patch16_dinov3.lvd1689m", (192, 384)),  # round 41: the same recipe at 192 x 384  # round 40 (revised): DINOv3 ViT-L/16, 9 x 17 patches
+        "cradio3L_384": ("c-radio_v3-l", (192, 384)),  # round 42: NVIDIA C-RADIOv3-L (src/task4.RadioClassifier), 12 x 24 patches
+        "dinov3Hp_144": ("vit_huge_plus_patch16_dinov3.lvd1689m", (144, 272))}  # round 42: DINOv3 ViT-H+/16, 9 x 17 patches
 V20 = ["cnxt", "deit3", "cnxt_hud", "cnxt22k_hud", "effv2_hud", "deit3_hud", "cnxtS_hud", "dinov2_v2"]
 MEMBER_W = {"dinov2_v2": 3.0}
 REPLACES = {"dinov2_r2": "dinov2_v2", "dinov2_sam": "dinov2_v2", "dinov2_photo": "dinov2_v2", "dinov2L": "dinov2_v2", "dinov2L_lpft": "dinov2_v2", "dinov2L_hud70": "dinov2_v2"}

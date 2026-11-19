@@ -3257,3 +3257,205 @@ inside the range stated before the upload (central about 0.8648, range 0.8635-0.
 so far. Unlike the earlier re-weightings (v23 +0.00007, v29 +0.00005), this one moved the public score as much as a new member: the
 weight moved onto the member that carries the train / test shift (DINOv3-L, ungated), not between members of similar strength.
 `submission.csv` = v32; snapshot `versions/v32_LB0.86564/` (pruned as v31's, 230 MB); README rows added.
+
+**Information (user question 2026-11-18): is DINOv3-L alone as good as v32?** On the training images, nearly (5-fold OOF, balanced
+mix, v17 rule; full / zoom70 / HUD hidden / real dark): DINOv3-L alone 0.9925 / 0.9849 / 0.9738 / 0.9823; + 35% probe 0.9930 / 0.9849 /
+0.9746 / 0.9836; + DINOv2-L (gated) + probe 0.9932 / 0.9851 / 0.9749 / 0.9836; v32 (in-sample weights) 0.9930 / 0.9848 / 0.9749 /
+0.9843. v32 minus DINOv3-L alone by fold: full -0.0013 +0.0008 +0.0017 +0.0012 +0.0001, dark -0.0016 +0.0058 +0.0054 +0.0055 -0.0040.
+Plain error counts on full frames 203 (alone) vs 204 (v32): the ensemble fixes 49 and breaks 50 (HUD hidden: 182 / 175). In v32
+DINOv3-L is 45% of the member average and 29% of the final mix (probe 35%). Most of the ensemble's edge over DINOv3-L alone comes from
+the probe; the eight older members add little on training images. They are kept because the test images are where the members
+disagree (DINOv3 vs DINOv2-L argmax agreement 0.93 on test vs 0.99 out of fold) and OOF cannot measure that; "DINOv3 alone" was not a
+pre-declared candidate and would fail the rule against v32 anyway (dark -0.0020, full -0.0005).
+
+**User decision (2026-11-18 ~21:30): Task 4 paused at v32.** Step 2 (`colab/t4_colab_dinov3c.ipynb`, DINOv3-L at 192 x 384) stays
+prepared and runs only if other teams overtake by a large margin; until then no more Colab training.
+
+**Master notebook re-executed for v32 (2026-11-18 ~22:00; `scripts/build_notebook.py`, then nbconvert, 39 min; log
+`outputs/r41/master_v32.log`).** Its submission.csv equals `submission_v32.csv` in Tasks 1, 3, 4 and 5 and differs in **one of
+25,889 Task 2 rows** (ANS19723: Social in the master run, Casual in v26-v32). Same Task 2 choices in both runs (KDE weight 0.6,
+multipliers Casual 0.842 / Grinder 1.03 / Social 1.032 / Whale 1.097); the in-sample grid values differ in the fourth decimal, i.e.
+floating-point differences in the Task 2 refit move one borderline row. `submission.csv` restored to the uploaded v32; the executed
+master notebook, its figures (optuna, t2_confusion, t5_detectors, t5_threshold) and the format variants (now v32-based) are kept.
+
+**Round 41 step 2, fold 0 (Colab run 2026-11-18 14:54-17:26 UTC, A100, 223 s/epoch; files fetched from Drive 2026-11-19 and
+validated: macro-F1 0.9930 = log, val_idx / test order = pipeline, views keys complete).** `dinov3L_384` (DINOv3-L at 192 x 384,
+v31's recipe) alone on fold 0: TTA 0.9930, above the pre-set bar 0.9925 (`dinov3L_lr8e5` fold 0: 0.9925); per view full 0.9934 /
+zoom70 0.9869 / HUD hidden 0.9760 / real dark 0.9860 (144 x 272: 0.9926 / 0.9848 / 0.9754 / 0.9878). Notebook gate and v24 check
+PASS (`fc_dinov3L_384_fold0_gate_colab.log`). Laptop check against v32 (`hh_r41_t4_dinov3_384_fold0.py --ref v32`, variants fixed
+before the run; `outputs/r41/hh_dinov3_384_fold0.log`), deltas full / zoom70 / HUD hidden / dark:
+R (in place of the 144 x 272 member) +0.0006 / +0.0012 / -0.0012 / -0.0006 fail; H (both at x10) +0.0005 / +0.0006 / -0.0015 /
++0.0016 fail; **A (both at x20) +0.0014 / +0.0016 / +0.0013 / +0.0016, 10 labels, fold-0 rule PASS** -> folds 1-4 are worth their
+compute by the pre-declared rule. Information only (not a decision variable): the 144 x 272 member alone at x40 (A's total DINOv3
+weight) gives +0.0003 / -0.0002 / -0.0010 / +0.0000, at x30 +0.0003 / +0.0001 / +0.0001 / +0.0000, so A's gain comes from the second
+resolution, not from more DINOv3 weight. Under the pause decision, folds 1-4 + full refit (about 6 h of A100 at the measured speed)
+run only on the user's go-ahead; the 5-fold judgement then uses a script written before folds 1-4 (as he_r40).
+
+**Task notebooks 1 and 3 re-executed (2026-11-19, rebuilt with `scripts/build_task_notebooks.py`; cell sources identical to the
+committed v23 builds, so only the outputs were refreshed).** task1 110 s, task3 615 s, no errors; their parts
+(`outputs/submission_parts/task1.csv`, `task3.csv`) are byte-identical to the ones `submission_v32.csv` was assembled from. All five
+task notebooks now carry executions of the current code (task2 v26, task4 v32, task5 v25 builds).
+
+**Round 41 step 2, all five folds -> v33 = 0.86625 (2026-11-19).** The user ran folds 1-4 + the full refit on Colab (A100, done
+00:28 UTC) and asked for eval + upload when done. The judge `hi_r41_t4_dinov3_384_eval.py` was written (and smoke-tested) at ~04:10
+Thai time, before any of folds 1-4 was looked at (folds 1-2 were on Drive, not downloaded). Files fetched with the Drive connector,
+validated (macro-F1 = Colab log on every fold, val_idx / test order = pipeline, views complete; full refit 18 epochs). Alone per fold
+(TTA) 0.9930 / 0.9931 / 0.9926 / 0.9914 / 0.9932; 5-fold OOF (balanced mix, v17 rule; full / zoom70 / HUD hidden / dark) 0.9928 /
+0.9845 / 0.9745 / 0.9807 vs the 144 x 272 member 0.9925 / 0.9849 / 0.9738 / 0.9823, so alone it is not better; it errs differently
+(test argmax agreement with the 144 x 272 member 0.95-0.96 vs 0.99 out of fold). Against v32 (reference reproduces v32's in-sample
+0.9930 / 0.9848 / 0.9749 / 0.9843): R (in place) +0.0002 / +0.0002 / -0.0002 / -0.0002 fail; H (both x10) +0.0002 / +0.0001 / -0.0000 /
++0.0008 fail; **A (both x20) +0.0007 / +0.0009 / +0.0016 / +0.0011, zoom / HUD by fold +0.0014 +0.0019 +0.0004 +0.0013 +0.0011, dark by
+fold +0.0016 +0.0000 +0.0016 +0.0000 +0.0024, 47 OOF labels; N picks A in 5/5 folds -> PASS**. Information: the 144 x 272 member alone
+at x40 +0.0003 / +0.0001 / -0.0001 / +0.0007 fails. Pipeline: `dinov3L_384` x20 on every frame added to `T4_MEMBER_W` (nb_part2;
+registry entry 192 x 384). Task 4 notebook rebuilt and executed (53 s; class multipliers stay off: nested +0.0001, and pinned off),
+task1 / task3 executions restored after the rebuild. `submission_v33.csv`: only Task 4 differs from v32 (287 of 25,889 labels;
+class counts 3526 / 7182 / 3763 / 6237 / 5181 -> 3498 / 7177 / 3838 / 6216 / 5160); an independent recomputation from the cached
+files (`repro_t4`, outside the repo) gives v32 exactly without the new member and v33 exactly with it. Predicted before the upload:
++0.0003..+0.0009 (0.8659-0.8665; outer 0.8652-0.8670), from the nested gain being about half of v31's / v32's and fewer labels moving.
+**Public 0.86625 (+0.00061 over v32), inside the prediction; best public score.** Snapshot `versions/v33_LB0.86625/` (preds pruned
+to git-tracked files + the new member, 235 MB); `submission.csv` = v33; README rows added. The master notebook is still the v32
+execution (differs from v33 only in Task 4).
+
+**Round 42 (user brief 2026-11-19, laptop only, 0 Colab CU): NVIDIA C-RADIO / MambaVision as frozen backbones
+(`ia_r42_t4_radio_frozen.py`, log `outputs/r42/ia_radio_frozen.log`; training images only).** Availability: timm 1.0.30 has no radio
+or mambavision model (only MambaOut). The Hugging Face repos need `trust_remote_code`; their code was read first (no subprocess /
+exec / network calls on the path used) and the revisions pinned (C-RADIOv3-L 9d041346, C-RADIOv2-L e359f6a8); weights from
+`model.safetensors`. Added to the venv for this (additive only, nothing upgraded): transformers 5.23.0, einops, open_clip_torch (the
+transformers loader insists on it), plus their small dependencies; requirements.txt not changed. MambaVision-L (21K) imports
+`mamba_ssm` unconditionally: source-only on PyPI, no nvcc on the laptop -> not run. RADIO configuration: input is [0, 1] RGB and the
+model normalises inside with the OpenAI CLIP mean / std (not ImageNet, and not "mean 0 / std 1" inside); patch 16,
+min_resolution_step 16, so 192 x 384 runs natively (12 x 24 grid); outputs summary 3072-d (class tokens of the CLIP, SigLIP 2 and
+DINOv2 teachers) and spatial features 288 x 1024. Frozen logistic probe exactly as hb_r40 (mean of image + h-flip, C 0.03, out of
+fold; balanced mix, v17 rule; full | real dark), rule fixed before the run (against DINOv3-L at the same 192 x 384: full >= -0.003
+and dark >= -0.003):
+
+| frozen backbone @ 192 x 384 | full | real dark / low-contrast | plain macro-F1 |
+|---|---|---|---|
+| **C-RADIOv3-L summary (3072-d)** | **0.9543** | **0.9027** | 0.9538 |
+| C-RADIOv3-L mean of spatial features (1024-d, info) | 0.9451 | 0.8879 | 0.9437 |
+| C-RADIOv2-L summary | 0.9378 | 0.8798 | 0.9379 |
+| C-RADIOv2-L mean of spatial features (info) | 0.9302 | 0.8669 | 0.9299 |
+| DINOv3-L (reference) | 0.9400 | 0.8831 | 0.9390 |
+| DINOv3-L @ 144 x 272 (hb_r40 cache; reproduces 0.9363 / 0.8716) | 0.9363 | 0.8716 | 0.9366 |
+
+C-RADIOv3-L summary minus DINOv3-L: full **+0.0143**, dark **+0.0195** -> passes ("as strong or stronger"); even its 1024-d mean of
+spatial features is ahead (+0.0051 / +0.0048), so not only the larger summary. C-RADIOv2-L -0.0022 / -0.0033 -> fails. Feature time
+on the laptop 10 min per RADIO model, 14 min for DINOv3-L at 192 x 384. A frozen-probe lead is no promise for fine-tuning (DINOv3 led
+DINOv2 frozen by +0.031 and needed a new recipe); the teachers overlap the MLP probe's backbones (CLIP, SigLIP 2, DINOv2).
+
+**Round 42 part A (user brief 2026-11-19: frozen C-RADIOv3-L summary into the MLP probe vs v33; `ib_r42_t4_probe_radio.py`, written
+before the run: P8 = P7 + C-RADIOv3-L at probe weight 0.35 / 0.40 / 0.45 chosen nested, P7 at 0.40 / 0.45 as information).**
+Features done and cached (`outputs/preds/t4_feat[_views]_cradio3L_192x384.npz`; input [0, 1], no ImageNet normalisation; mean of image
++ h-flip; training full / zoom70 / HUD hidden in 21 min, test 9 min; the full-frame cache of ia_r42 reproduced exactly on 256 images).
+P7 recomputed alone: full 0.9724, zoom70 0.9510, HUD hidden 0.9321, dark 0.9342. The run was then **stopped by Claude Code for low
+system memory** while fitting P8 (10,112 features; about 10 GB of RAM at peak) - not a failure of the script; not restarted without
+the user's OK. The probe step now keeps the cached float16 features as float16 until standardisation (same numbers, about half the
+RAM).
+
+**Round 42 part B (fine-tuning path for C-RADIOv3-L, laptop smoke test; `src/task4.RadioClassifier`, pipeline name `c-radio_v3-l`).**
+The wrapper loads `nvidia/C-RADIOv3-L` at the pinned revision (transformers AutoModel, trust_remote_code), undoes the pipeline's
+ImageNet normalisation so the backbone receives [0, 1] and applies only its own CLIP normalisation, puts Linear(3072 -> 5) on the
+summary, sets stochastic depth 0 -> 0.1 over the 24 blocks, freezes timm's unused `reg_token` (the CPE patch generator carries the
+class + register tokens; `model.norm` is Identity in RADIO), exposes `set_grad_checkpointing` (RADIO's CPE forward runs timm's
+`checkpoint_seq` over the blocks) and a `group_matcher` for layer decay (patch generator = stem; the regex group must be
+non-capturing, timm reads captured groups as ordinals - the first version failed exactly there). Smoke test
+(`ic_r42_t4_radio_smoke.py`, log `outputs/r42/ic_radio_smoke.log`) - all five checks pass: (1) wrapper summary vs RADIO on [0, 1]
+max |diff| 4.8e-6; (2) layer decay 0.90: 341 / 341 trainable parameters grouped, patch generator 0.0718, blocks 0 -> 23 0.0798 ->
+0.900 in steps of x0.9, head 1.0; (3) gradient checkpointing: 24 checkpointed segments per step (0 without), peak memory of a batch of
+8 4.02 -> 3.36 GB, every trainable parameter gets a finite gradient (module forward hooks do not re-fire in torch's recomputation, also
+on a plain timm ViT, so they are not a counter); (4) `train_fold` for two steps of batch 4 at 192 x 384 with the Colab recipe (lr 8e-5,
+layer decay 0.90, p_hud 0.70, Mixup / CutMix, bf16, grad-ckpt, EMA) and its validation pass: finite loss, EMA weights moved;
+(5) state_dict -> `create_model(pretrained=False)` -> strict load -> identical logits (the views / test scripts' path). Colab:
+`python colab/build_t4_colab_nb.py radio3` -> `colab/t4_colab_radio3.ipynb` (dinov3c's recipe, tag `cradio3L_384`, fold 0 only, gate
+alone >= 0.9925 + v24 check, extra pip packages pinned to the laptop's versions, a RADIO compatibility cell); `em_r30_t4_hardviews.py`
+knows `cradio3L_384`; laptop fold-0 comparison with v33 `hj_r42_t4_radio_fold0.py` (R in place of the 192 x 384 DINOv3-L, H added
+x10, A added x20; written before the run; `--probe p8 --pw w` if part A changes the probe); `colab/upload/cpe342_code.zip` rebuilt
+(35,113,700 bytes; data zip unchanged).
+* **radio3 notebook, first Colab attempt (2026-11-19 07:57 UTC): stopped by the notebook's own compatibility cell, not by the model.**
+  The model loaded (343 weights), trained one batch of 64 at 192 x 384 (peak 10.5 GiB with grad-ckpt) with finite gradients, but the
+  cell (a) compared wrapper and RADIO summaries with the model in train mode, where stochastic depth drops blocks at random
+  (max |diff| 14; in eval mode it is 5e-6), and (b) still counted block forward hooks, which the laptop smoke test had already shown
+  do not re-fire in torch's recomputation (3 = two comparison passes + one training pass). Fixed in the builder: the comparison runs
+  in eval mode and the check counts `torch.utils.checkpoint.checkpoint` calls (24 per step with grad-ckpt). The regenerated cell was
+  executed verbatim on the laptop (batch 8): diff 5.2e-6, 24 / 24 blocks checkpointed, gradients finite. The code bundle is unchanged.
+* **Round 42 part A result (restarted with the user's OK; probe step only, 23 min; log `outputs/r42/ib_probe_radio.log`): FAILS -> v33
+  unchanged.** Probes alone (balanced mix, rule; full / zoom70 / HUD hidden / dark): P7 0.9724 / 0.9510 / 0.9321 / 0.9342 (reproduces
+  gs_r39's cache exactly, v33 labels identical); **P8 0.9760 / 0.9573 / 0.9368 / 0.9394** (+0.0036 / +0.0063 / +0.0047 / +0.0052 as a
+  probe); C-RADIOv3-L alone 0.9725 / 0.9520 / 0.9228 / 0.9333 (as good as all seven together on full frames). But inside v33 (both
+  DINOv3-L members x20 now carry most of the ensemble) the better probe does not help: P8 at 0.35 +0.0001 / -0.0001 / -0.0002 /
+  -0.0004; at 0.40 +0.0000 / -0.0003 / -0.0005 / -0.0007; at 0.45 -0.0001 / -0.0005 / -0.0011 / -0.0012; N picks none in all five
+  folds. Information: P7 at 0.40 / 0.45 also loses on HUD hidden (-0.0007 / -0.0016): the 0.35 probe weight still holds. A stronger
+  frozen probe adds little once the fine-tuned DINOv3 members are in; whether a fine-tuned C-RADIOv3-L adds something is part B's
+  fold-0 question (`hj_r42_t4_radio_fold0.py` with its default reference, v33 = P7 at 0.35).
+* **Round 42 part B, fold 0 on Colab (2026-11-19 10:27-11:27 UTC, A100, 193 s/epoch; files fetched from Drive and validated: macro-F1
+  0.9945 = log, val_idx / test order = pipeline, views complete): C-RADIOv3-L fine-tuned is the strongest single model so far, but
+  it FAILS the fold-0 rule against v33 on the real dark frames -> stop (rule fixed before the run).** Alone on fold 0 (TTA)
+  **0.9945** (dinov3L_384 0.9930, dinov3L_lr8e5 0.9925); balanced / rule: full 0.9941, zoom70 0.9881, HUD hidden 0.9769, but real dark
+  / low-contrast **0.9827** (DINOv3 members 0.9860 / 0.9878). Notebook gate PASS (alone >= 0.9925; v24 check passes at weight 4, 8 and
+  in place, fails at 2). Test argmax agreement with dinov3L_384 0.938 (very different errors). `hj_r42_t4_radio_fold0.py` against v33
+  (full / zoom70 / HUD hidden / dark): R in place of dinov3L_384 +0.0008 / +0.0015 / +0.0012 / **-0.0007**; H added x10 +0.0009 /
+  +0.0008 / +0.0008 / **-0.0006**; A added x20 +0.0010 / +0.0018 / +0.0018 / **-0.0021** -> no variant passes. The same pattern as
+  DINOv2-L in round 39 (gains on zoom / HUD, loses on dark frames; there a per-image brightness / contrast gate rescued it), and the
+  frozen probe (part A) also gained nothing inside v33. A gated variant was not among the pre-declared ones; any such idea now is
+  informed by fold 0 and could only be judged on folds 1-4.
+* **Round 42 part B, gated variants on fold 0 (user brief, post hoc after hj_r42; `hk_r42_t4_radio_gated_fold0.py`, log
+  `outputs/r42/hk_radio_gated_fold0.log`): v30's Q10 brightness / contrast gate unchanged; C-RADIOv3-L added to v33 at x10 / x20 on
+  normal frames and x2 / x0 on gated frames.** The gate covers all 835 real dark / low-contrast frames of fold 0 (13.2% of frames
+  gated). Alone, C-RADIOv3-L is 0.9827 on gated and 0.9959 on normal frames (dinov3L_384: 0.9860 / 0.9945). Against v33 (full /
+  zoom70 / HUD hidden / dark): x10/x2 +0.0009 / +0.0005 / +0.0009 / +0.0000; x10/x0 +0.0009 / +0.0005 / +0.0012 / +0.0000; x20/x2
+  +0.0012 / +0.0010 / +0.0014 / +0.0000; x20/x0 +0.0012 / +0.0010 / +0.0017 / +0.0000; 4-5 labels change on full frames, none on the
+  dark frames. The gate removes the dark-frame loss exactly but cannot make it positive (the member adds nothing there even at x2,
+  unlike DINOv2-L in v30), so under the rule (dark > 0) every variant fails -> stop at fold 0. Changing the rule to dark >= 0 for gated
+  members would be the user's decision; it was not made.
+* **Round 42, frozen-probe screen for the dark frames (user brief 2026-11-19; `id_r42_t4_dark_screen.py`, log
+  `outputs/r42/id_dark_screen.log`; rule fixed before the run: clear win = against DINOv3-L at the same geometry dark >= +0.005 and
+  full >= -0.003).** timm 1.0.30 names checked (all ImageNet mean / std): `convnext_large.dinov3_lvd1689m` @ 192 x 384 0.9092 full /
+  0.8448 dark (-0.0308 / -0.0383); `convnextv2_large.fcmae_ft_in22k_in1k_384` @ 192 x 384 0.9041 / 0.8510 (-0.0359 / -0.0321);
+  **`vit_huge_plus_patch16_dinov3.lvd1689m` @ 144 x 272 0.9486 / 0.8927 (+0.0123 / +0.0211 against DINOv3-L @ 144 x 272; +0.0086 /
+  +0.0096 against DINOv3-L @ 192 x 384) -> clear win**; ran on the 8 GB GPU with fp32 weights + bf16 autocast (peak 5.5 GB, 20 min).
+  (C-RADIOv3-L, info: 0.9543 / 0.9027.) Fine-tune prepared under the stated caveat (RADIO's frozen dark-frame lead did not survive
+  fine-tuning): `python colab/build_t4_colab_nb.py dinov3h` -> `colab/t4_colab_dinov3h.ipynb`, tag `dinov3Hp_144`, the dinov3b
+  recipe unchanged (lr 8e-5, layer decay 0.90 - over 32 blocks block 0 gets 0.034 of the head's lr -, 18 epochs, HUD dropout 0.70,
+  batch 64, grad-ckpt on; about 16 GiB of training state, A100), fold 0 only, gate alone >= 0.9925 + v24 check. CPU check: 488 / 488
+  parameters in the layer-decay groups, 158 tokens at 144 x 272, checkpointing available. Laptop fold-0 comparison with v33:
+  `hl_r42_t4_dinov3h_fold0.py` (R in place of dinov3L_lr8e5, H x10, A x20, G x20 / x2 gated - the gated variant declared up front
+  this time); smoke-tested with cradio3L_384 as a stand-in (reproduces hj / hk). `em_r30_t4_hardviews.py` knows `dinov3Hp_144`;
+  bundle rebuilt.
+* **Round 42 part B, folds 1-4 (the user ran them on Colab 12:07-16:14 UTC, no full refit; judged by `hm_r42_t4_radio_eval.py`,
+  written before any fold 1-4 result was looked at; fold 0 excluded from the decision because it had been seen; log
+  `outputs/r42/hm_radio_eval.log`).** Files validated (macro-F1 = log; val_idx / test order = pipeline; views complete). Alone (TTA)
+  folds 0-4: 0.9945 / 0.9926 / 0.9915 / 0.9933 / 0.9924 - fold 0 was the lucky one; on folds 1-4 (balanced, rule) it ties dinov3L_384
+  (full 0.9925 vs 0.9926, dark 0.9787 vs 0.9794). Against v33 on folds 1-4 (full / zoom70 / HUD hidden / dark): R -0.0002 / +0.0004 /
+  +0.0000 / -0.0012 fail; H +0.0003 / +0.0004 / +0.0005 / -0.0005 fail; A +0.0001 / +0.0006 / +0.0008 / -0.0014 fail; **G20/2 +0.0003 /
+  +0.0005 / +0.0007 / +0.0005 PASS** (zoom / HUD 4/4 folds; dark by fold -0.0010 +0.0000 +0.0014 +0.0013); G10/2 +0.0004 / +0.0003 /
+  +0.0004 / +0.0005 PASS (zoom / HUD 3/4); G20/0, G10/0 dark exactly 0 -> fail. **N picks G20/2 in all four folds -> PASSES**; 23 OOF
+  labels change on folds 1-4. Information, all five folds: G20/2 +0.0005 / +0.0006 / +0.0008 / +0.0004. The gain is about half of
+  v33's (+0.0007 / +0.0009 / +0.0016 / +0.0011). A pipeline member would be `cradio3L_384` x20 on normal frames and x2 on gated
+  frames (the DINOv2-L treatment); its full refit has not been run (the pipeline falls back to the 5-fold test average when
+  `t4_cradio3L_384_full.npz` is missing).
+* **v34 built (2026-11-20, not uploaded yet): v33 + `cradio3L_384` x20 on normal / x2 on gated frames, without its full refit (test
+  input = 5-fold average).** `scripts/nb_part2.py`: registry entry (`c-radio_v3-l`, 192 x 384), `T4_MEMBER_W` 20, `T4_MEMBER_W_DARK` 2,
+  summary string. Task 4 notebook rebuilt and executed (222 s, no errors; class multipliers stay off - the nested check now shows
+  0.9934 -> 0.9939, but `T4_CLASS_MULT = False` pins them off); task1 / task3 executions restored after the rebuild.
+  `submission_v34.csv` (sha f1875959...): only Task 4 differs from v33, 151 of 25,889 labels (3 of them on gated test frames, 16.6%
+  of the test images gated); the independent recomputation (scratchpad `repro_t4.py`, now reading both weight dicts from nb_part2)
+  gives v33 exactly without the member and v34 exactly with it. Predicted before any upload: +0.0001..+0.0004 (0.8663-0.8667; outer
+  0.8658-0.8670), from a nested gain about half of v33's and about half as many labels moving. A full refit of the member is being
+  run on Colab (watched from here); with it the file becomes v35.
+* **v34 = 0.86623 (uploaded 2026-11-20 00:50 Thai time with the user's OK; -0.00002 against v33's 0.86625).** Below the stated range
+  (0.8663-0.8667; inside the outer 0.8658-0.8670): with 151 labels moving the change is within the public split's noise, as v26 was
+  (-0.00001). Kept on the nested evidence like v26 (folds 1-4: +0.0003 / +0.0005 / +0.0007 / +0.0005); the best public file remains
+  v33, so the final Kaggle selection is made by hand. Snapshot `versions/v34_LB0.86623/` (pruned as v33's plus the five RADIO folds,
+  238 MB); `submission.csv` = v34 (matches the pipeline code); README rows added. The member's full refit (watched on Drive) would
+  give v35.
+* **v35 built (2026-11-20 ~02:20 Thai time, not uploaded): v34 with the C-RADIOv3-L member's full refit** (Colab, 17:55-19:06 UTC,
+  18 epochs at about 230 s; file validated: test order = pipeline, finite; test argmax agreement with the dinov3L_384 refit 0.938).
+  Task 4 notebook re-executed only (nb_part2 unchanged; "cradio3L_384: full-data model included"; multipliers off; no errors).
+  `submission_v35.csv` (sha 476d656b...): only Task 4 differs from v33 (165 labels) and 73 labels from v34; the independent
+  recomputation reproduces v33 without the member and v35 with it exactly. Predicted before any upload: about v34's score
+  (0.8660-0.8665), since only this member's test input moved (5-fold average -> 0.5 x 5-fold + 0.5 x full refit, as every other
+  member). The repo's task4 notebook / submission part now produce v35 while `submission.csv` is still v34 (the uploaded file).
+* **v35 = 0.86627 (uploaded 2026-11-20 02:24 Thai time with the user's OK): +0.00002 over v33, +0.00004 over v34** - inside the
+  stated range, best public by a noise-level margin. The C-RADIOv3-L member (round 42) is neutral on the public split; its
+  out-of-fold gain was +0.0003..+0.0007. Snapshot `versions/v35_LB0.86627/` (pruned as v34's plus the refit file);
+  `submission.csv` = v35 (matches the pipeline code and the executed task4 notebook); README rows added.
