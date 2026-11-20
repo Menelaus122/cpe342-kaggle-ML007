@@ -120,6 +120,9 @@ T4_BACKBONES = {   # tag -> (timm model, input HxW) as trained by scripts/train_
     # own CLIP normalisation, Linear head on the 3072-d summary) at 192x384, the same recipe and folds on a Colab A100
     # (--lr 8e-5 --layer-decay 0.90 --warmup-epochs 2 --epochs 18 --p-hud 0.70 --grad-ckpt; colab/t4_colab_radio3.ipynb)
     "cradio3L_384": ("c-radio_v3-l", (192, 384)),
+    # round 42 (v36): DINOv3 ViT-H+/16 (841 M, 32 blocks) at 144x272, the dinov3L_lr8e5 recipe unchanged, on a Colab A100
+    # (--lr 8e-5 --layer-decay 0.90 --warmup-epochs 2 --epochs 18 --p-hud 0.70 --grad-ckpt; colab/t4_colab_dinov3h.ipynb)
+    "dinov3Hp_144": ("vit_huge_plus_patch16_dinov3.lvd1689m", (144, 272)),
 }
 fold_done = lambda tag: all((C.PRED_DIR / f"t4_{tag}_fold{f}.npz").exists() for f in range(N_FOLDS))
 if not fold_done("cnxt") and RUN_T4_TRAINING:
@@ -724,13 +727,20 @@ pf["OOF (all folds)"] = [macro_f1(y4, oof_tag[t].argmax(1)) for t in pf.index]
 # frames +0.0011, zoom / HUD better in 5/5 folds, dark frames by fold +0.0016 +0.0000 +0.0016 +0.0000 +0.0024. The 144x272 member
 # alone at x40 (the same total DINOv3 weight) does not pass: the gain comes from the second resolution, not from more weight.
 T4_MEMBER_W = {"dinov2_v2": 8.0, "cnxt": 0.5, "deit3": 0.5, "cnxt_hud": 1.5, "cnxt22k_hud": 1.5, "effv2_hud": 1.5, "deit3_hud": 1.5,
-               "cnxtS_hud": 1.5, "dinov2L_hud70": 8.0, "dinov3L_lr8e5": 20.0, "dinov3L_384": 20.0, "cradio3L_384": 20.0}
+               "cnxtS_hud": 1.5, "dinov2L_hud70": 8.0, "dinov3L_lr8e5": 20.0, "dinov3L_384": 20.0, "cradio3L_384": 20.0,
+               "dinov3Hp_144": 20.0}
 # Round 42 (v34): C-RADIOv3-L x20 on normal frames and x2 on gated (dark / low-contrast) frames, the DINOv2-L treatment. Fold 0 was
 # seen first (ungated R / H / A lost on the dark frames, hj_r42; the gated variants were proposed after that, hk_r42), so the decision
 # was made on folds 1-4 only by a script written before they were looked at (experiments/claude/hm_r42_t4_radio_eval.py): nested
 # over R / H / A and gated x20 or x10 with x2 or x0, the same choice (x20 / x2) in all four folds; against v33 full +0.0003, 70% zoom
 # +0.0005, HUD hidden +0.0007, real dark frames +0.0005, zoom / HUD better in 4/4 folds. The member's full refit is not in v34 (its
 # test input is the 5-fold average).
+# Round 42 (v36): DINOv3 ViT-H+/16 at 144x272 x20 on every frame (no gate: alone it is the best member on the real dark frames
+# too, 0.9849 against 0.9823 for dinov3L_lr8e5). Chosen by a frozen-probe screen for the dark frames (id_r42); variants fixed before
+# the run (hl_r42) and judged on all five folds against v35 by a script written before any result was looked at
+# (experiments/claude/hn_r42_t4_dinov3h_eval.py): in place of dinov3L_lr8e5, added x10, added x20, added x20 / x2 gated -> nested
+# picks x20 in four folds (in place in the fifth); against v35 full +0.0004, 70% zoom +0.0009, HUD hidden +0.0013, real dark frames
+# +0.0012, zoom / HUD better in 5/5 folds, dark frames never worse in any fold.
 T4_MEMBER_W_DARK = {**T4_MEMBER_W, "dinov2L_hud70": 2.0, "cradio3L_384": 2.0}
 GATE_Q4 = 0.10
 
@@ -829,7 +839,7 @@ for i, v in enumerate(pc4[::-1]):
     axes[1].text(v, i, f" {v:.4f}", va="center", fontsize=8.5)
 axes[1].set_xlim(0.9, 1.0); axes[1].set_title("Per-class F1 (OOF)")
 plt.tight_layout(); savefig(fig, "t4_confusion"); plt.show()
-summary.append(["Task 4", "macro-F1", SCORE4, f"{' + '.join(T4_TAGS)} 5-fold, GPU aug + Mixup/CutMix, EMA, h-flip TTA{', brightness / contrast gate for DINOv2-L (x8 / x2)' if 'dinov2L_hud70' in T4_TAGS else ''}{' and C-RADIOv3-L (x20 / x2)' if 'cradio3L_384' in T4_TAGS else ''}{', DINOv3-L at 144x272 and 192x384 (x20 each) on every frame' if 'dinov3L_384' in T4_TAGS else ', DINOv3-L x20 on every frame' if 'dinov3L_lr8e5' in T4_TAGS else ''}{f' + {PROBE_W4:.0%} frozen-feature probe' if HAS_PROBE4 else ''}, balanced-prior rule (alpha 0.75)"])
+summary.append(["Task 4", "macro-F1", SCORE4, f"{' + '.join(T4_TAGS)} 5-fold, GPU aug + Mixup/CutMix, EMA, h-flip TTA{', brightness / contrast gate for DINOv2-L (x8 / x2)' if 'dinov2L_hud70' in T4_TAGS else ''}{' and C-RADIOv3-L (x20 / x2)' if 'cradio3L_384' in T4_TAGS else ''}{', DINOv3-L at 144x272 and 192x384 (x20 each) on every frame' if 'dinov3L_384' in T4_TAGS else ', DINOv3-L x20 on every frame' if 'dinov3L_lr8e5' in T4_TAGS else ''}{', DINOv3 ViT-H+ x20 on every frame' if 'dinov3Hp_144' in T4_TAGS else ''}{f' + {PROBE_W4:.0%} frozen-feature probe' if HAS_PROBE4 else ''}, balanced-prior rule (alpha 0.75)"])
 """)
 code(r"""
 # Diversity of the members on held-out TRAINING images: pairwise agreement of their OOF labels (test images are not used)

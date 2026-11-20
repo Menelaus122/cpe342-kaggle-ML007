@@ -3459,3 +3459,31 @@ x10, A added x20; written before the run; `--probe p8 --pw w` if part A changes 
   stated range, best public by a noise-level margin. The C-RADIOv3-L member (round 42) is neutral on the public split; its
   out-of-fold gain was +0.0003..+0.0007. Snapshot `versions/v35_LB0.86627/` (pruned as v34's plus the refit file);
   `submission.csv` = v35 (matches the pipeline code and the executed task4 notebook); README rows added.
+* **Round 42, second frozen-probe screen (user brief 2026-11-20, 240 Colab CU left; `ie_r42_t4_screen2.py`, log
+  `outputs/r42/ie_screen2.log`; rule as id_r42, fixed before the run).** `vit_giant_patch14_reg4_dinov2.lvd142m` (DINOv2-g/14,
+  1,135 M, 40 blocks, 1536-d class token) @ 126 x 238: **0.9454 full / 0.8944 dark, against DINOv3-L @ 144 x 272 (same 9 x 17 grid)
+  +0.0092 / +0.0229 -> clear win** (against ViT-H+ @ 144 x 272: -0.0032 / +0.0017, i.e. about equal); DINOv2-L at the same geometry
+  was 0.9050 / 0.8318. `vit_large_patch16_dinov3.lvd1689m` @ 224 x 448: 0.9392 / 0.8746, against @ 192 x 384 -0.0008 / -0.0085 -> no
+  (a higher input resolution than 384 does not help frozen DINOv3-L, least of all on the dark frames). Second candidate by the rule:
+  DINOv2-g @ 126 x 238. (Its features took 196 min on the laptop: 7.1 GB peak on the 8 GB card spilled into shared memory.)
+* **Round 42, DINOv3 ViT-H+/16 (`dinov3Hp_144`) on all five folds + full refit (the user ran them on Colab, 19:50-04:09 UTC;
+  judged by `hn_r42_t4_dinov3h_eval.py`, written before any result was looked at; reference = v35, the pipeline in use; log
+  `outputs/r42/hn_dinov3h_eval.log`).** Files validated (macro-F1 = log on every fold, val_idx / test order = pipeline, views
+  complete, full refit 18 epochs). **Alone (TTA) 0.9960 / 0.9950 / 0.9953 / 0.9946 / 0.9948 - the best member on every fold**;
+  5-fold balanced / rule: full 0.9948, zoom70 0.9868, HUD hidden 0.9780, real dark 0.9849, normal frames 0.9962 (dinov3L_lr8e5 0.9925
+  / 0.9849 / 0.9738 / 0.9823; C-RADIOv3-L 0.9928 / 0.9848 / 0.9743 / 0.9795): unlike RADIO it is the best member on the dark frames
+  too, so the frozen-probe screen aimed at the dark frames (id_r42) picked well. Against v35 (full / zoom70 / HUD hidden / dark): R (in
+  place of dinov3L_lr8e5) +0.0005 / +0.0011 / +0.0014 / +0.0011 PASS; H (x10) +0.0003 / +0.0007 / +0.0010 / +0.0012 PASS; **A (x20)
+  +0.0004 / +0.0010 / +0.0016 / +0.0015 PASS**; G (x20 / x2 gated) +0.0003 / +0.0009 / +0.0013 / +0.0006 PASS. **N picks A, A, R, A,
+  A -> +0.0004 / +0.0009 / +0.0013 / +0.0012, zoom / HUD 5/5 folds, dark by fold +0.0000 +0.0017 +0.0014 +0.0014 +0.0015 -> PASSES;
+  pipeline variant A (x20 on every frame).** Against v33 (information): A +0.0010 / +0.0016 / +0.0024 / +0.0019.
+* **v36 built (not uploaded yet): v35 + `dinov3Hp_144` x20 on every frame, with its full refit.** nb_part2 registry / weights /
+  summary; Task 4 notebook rebuilt and executed (64 s, no errors; multipliers off); task1 / task3 kept. `submission_v36.csv` (sha
+  e2b61c87...): only Task 4 differs from v35, 268 labels (71 on gated test frames; 307 vs v33); the independent recomputation gives
+  v35 exactly without the member and v36 exactly with it. Predicted before any upload: +0.0003..+0.0009 over v35 (0.8666-0.8672;
+  outer 0.8662-0.8675) - a nested gain like v33's over v32 (which gave +0.00061 with 287 labels), from a member much stronger alone
+  than C-RADIOv3-L (whose +0.0003..+0.0007 gave nothing measurable).
+* **v36 = 0.86727 (uploaded 2026-11-20 11:22 Thai time with the user's OK): +0.00100 over v35, the best public score; at the top
+  of the stated range (0.8666-0.8672).** As with v31 / v32 / v33, a member that is strong alone on the hard views and the dark frames
+  moves the public score by about +0.001, while C-RADIOv3-L (similar out-of-fold ensemble deltas, weaker alone on the dark frames)
+  moved nothing. Snapshot `versions/v36_LB0.86727/`; `submission.csv` = v36; README rows and the Task 4 description updated.
