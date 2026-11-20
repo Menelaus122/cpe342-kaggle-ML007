@@ -4,7 +4,8 @@ import sys
 import nbformat as nbf
 
 PROFILE = sys.argv[1] if len(sys.argv) > 1 else "seed2"     # seed2 -> colab/t4_colab_train.ipynb; dinov3 -> colab/t4_colab_dinov3.ipynb;
-assert PROFILE in ("seed2", "dinov3", "dinov3b", "dinov3c", "radio3", "dinov3h"), PROFILE   # dinov3b -> colab/t4_colab_dinov3b.ipynb (DINOv3 at lr 8e-5,
+assert PROFILE in ("seed2", "dinov3", "dinov3b", "dinov3c", "radio3", "dinov3h", "dinov2g"), PROFILE   # dinov2g ->
+# colab/t4_colab_dinov2g.ipynb (round 42: DINOv2-g/14 at 126 x 238, DINOv2-L recipe with lr 2e-5 / layer decay 0.90, fold 0 only)   # dinov3b -> colab/t4_colab_dinov3b.ipynb (DINOv3 at lr 8e-5,
 # fold 0 only); dinov3c -> colab/t4_colab_dinov3c.ipynb (round 41: the same DINOv3 recipe at 192 x 384, fold 0 only); radio3 ->
 # colab/t4_colab_radio3.ipynb (round 42: NVIDIA C-RADIOv3-L at 192 x 384 with the dinov3c recipe, fold 0 only); dinov3h ->
 # colab/t4_colab_dinov3h.ipynb (round 42: DINOv3 ViT-H+/16 at 144 x 272 with the dinov3b recipe, fold 0 only)
@@ -551,6 +552,79 @@ if PROFILE == "dinov3h":
         assert src.count(old) == 1, old
         src = src.replace(old, new)
     nb.cells[1].source = src
+if PROFILE == "dinov2g":
+    out_path = "colab/t4_colab_dinov2g.ipynb"
+    nb.cells[0].source = nb.cells[0].source.replace(
+        "# CPE342 Task 4: GPU training on Colab (round 40 step 3: a second seed of the v30 DINOv2-L member; all folds + full refit)",
+        "# CPE342 Task 4: GPU training on Colab (round 42: DINOv2-g/14 at 126x238; fold 0 only)\n\n"
+        "**This notebook (user brief of 2026-11-20, after v36 = 0.86727):** `vit_giant_patch14_reg4_dinov2.lvd142m` (DINOv2-g/14 with 4 "
+        "registers, 1,135 M parameters, 40 blocks, 1536-d class token; timm 1.0.30, ImageNet mean / std) at **126x238** = 9 x 17 patches, "
+        "the geometry of v30's DINOv2-L. Chosen by the second frozen-probe screen (`experiments/claude/ie_r42_t4_screen2.py`, rule fixed "
+        "before the run): frozen DINOv2-g beat frozen DINOv3-L at the same 9 x 17 grid by +0.0092 (full) and +0.0229 (real dark frames), "
+        "about level with frozen ViT-H+. **Recipe (user's, fixed before the run):** v30's DINOv2-L recipe with **lr 2e-5** and **layer "
+        "decay 0.90** for the 40 blocks (block 0 at 0.015 of the head's lr; DINOv2-L at 0.85 over 24 blocks: 0.020), 2 warm-up + 13 "
+        "cosine epochs (15), HUD dropout 0.70, batch 64, **gradient checkpointing always on** (about 21 GiB of training state: use an A100 "
+        "80 GB; a VRAM smoke test - one full training step with AdamW and the EMA copy - runs before the benchmark). Tag `dinov2g_126`. "
+        "**Fold 0 only** (`FOLDS = [0]`, `DO_FULL = False`). Gate, fixed before the run: alone >= **0.9925** macro-F1 on fold 0 "
+        "(`MIN_ALONE`) **and** the v24 check against the v23 members; then, on the laptop, the fold-0 comparison with v36 "
+        "(`experiments/claude/ho_r42_t4_dinov2g_fold0.py`, variants fixed before the run). If it passes and the user goes on: "
+        "`FOLDS = [0, 1, 2, 3, 4]`, `DO_FULL = True`, *Run all* (fold 0 reused from Drive). The sections below describe earlier runs.")
+    src = nb.cells[1].source
+    for old, new in (('TAG = "dinov2L_hud70_s2"', 'TAG = "dinov2g_126"'),
+                     ('LR, P_HUD = "3e-5", "0.70"', 'LR, P_HUD = "2e-5", "0.70"'),
+                     ('LD, EPOCHS = "0.85", "15"', 'LD, EPOCHS = "0.90", "15"'),
+                     ('MIN_ALONE = None ', 'MIN_ALONE = 0.9925'),
+                     ('FOLDS = [0, 1, 2, 3, 4]       # fold 0 first; folds 1-4 only if fold 0 passes the gate',
+                      'FOLDS = [0]                   # fold 0 only (user brief); after a PASS: [0, 1, 2, 3, 4] and DO_FULL = True'),
+                     ('GATE = False ', 'GATE = True '),
+                     ('SEED_OFFSET = 1000', 'SEED_OFFSET = 0'),
+                     ('DO_FULL = True ', 'DO_FULL = False '),
+                     ('MODELS_ON_DRIVE = True        # 1.2 GB per checkpoint (about 6 GB in all)',
+                      'MODELS_ON_DRIVE = True        # 4.5 GB per checkpoint for DINOv2-g (about 27 GB for five folds + full)'),
+                     ('GRAD_CKPT = "auto"            # gradient checkpointing changes memory only, not the result: auto = on below 60 GB of GPU memory',
+                      'GRAD_CKPT = True              # always on for DINOv2-g (1,135 M parameters); changes memory only, not the result'),
+                     ('MODEL = "vit_large_patch14_reg4_dinov2.lvd142m"', 'MODEL = "vit_giant_patch14_reg4_dinov2.lvd142m"')):
+        assert src.count(old) == 1, old
+        src = src.replace(old, new)
+    nb.cells[1].source = src
+    smoke = nbf.v4.new_code_cell(r"""
+# ---- DINOv2-g VRAM smoke test: one full training step (forward + backward + AdamW step + EMA copy) at H x W, batch 64 -----------
+# (downloads the weights, 4.5 GB). Peak memory here ~ the training run's; stop if it exceeds the GPU (switch to an A100 80 GB).
+import copy
+import sys
+import timm
+import torch
+from timm.optim import param_groups_layer_decay
+sys.path.insert(0, str(R))
+from src import task4
+print("timm", timm.__version__, "| model in timm:", MODEL.split(".")[0] in timm.list_models("vit_giant*"))
+torch.cuda.empty_cache()
+torch.cuda.reset_peak_memory_stats()
+m = task4.create_model(MODEL, img_size=(H, W)).cuda().to(memory_format=torch.channels_last).train()
+ema = copy.deepcopy(m).eval()
+if GRAD_CKPT:
+    m.set_grad_checkpointing(True)
+groups = param_groups_layer_decay(m, weight_decay=0.05, layer_decay=float(LD))
+for g in groups:
+    g["lr"] = float(LR) * g.pop("lr_scale", 1.0)
+opt = torch.optim.AdamW(groups, lr=float(LR), weight_decay=0.05)
+x = torch.rand(64, 3, H, W, device="cuda")
+with torch.autocast("cuda", dtype=torch.bfloat16):
+    out = m(task4.normalize(x).to(memory_format=torch.channels_last))
+    tokens = m.forward_features(task4.normalize(x[:1]))
+out.float().logsumexp(1).mean().backward()
+torch.nn.utils.clip_grad_norm_(m.parameters(), 2.0)
+opt.step()
+peak, total = torch.cuda.max_memory_allocated() / 2**30, torch.cuda.get_device_properties(0).total_memory / 2**30
+print(f"{len(m.blocks)} blocks, {sum(p.numel() for p in m.parameters()) / 1e6:.0f} M parameters, tokens {tuple(tokens.shape)} (9 x 17 = 153 "
+      f"patches + class + 4 registers); grad of the patch embedding finite {torch.isfinite(m.patch_embed.proj.weight.grad).all().item()}; "
+      f"peak GPU memory of one training step (batch 64, AdamW, EMA copy) {peak:.1f} of {total:.0f} GiB")
+assert peak < 0.92 * total, "too close to the GPU memory: use an A100 80 GB (or ACCUM = 2)"
+del m, ema, opt, out, x, tokens
+torch.cuda.empty_cache()
+""".strip("\n"))
+    k = next(i for i, c in enumerate(nb.cells) if c.cell_type == "code" and c.source.lstrip().startswith("# ---- 1-epoch benchmark"))
+    nb.cells.insert(k, smoke)
 nbf.write(nb, out_path)
 print("profile", PROFILE, "->", out_path)
 print("written", len(nb.cells), "cells")

@@ -3487,3 +3487,36 @@ x10, A added x20; written before the run; `--probe p8 --pw w` if part A changes 
   of the stated range (0.8666-0.8672).** As with v31 / v32 / v33, a member that is strong alone on the hard views and the dark frames
   moves the public score by about +0.001, while C-RADIOv3-L (similar out-of-fold ensemble deltas, weaker alone on the dark frames)
   moved nothing. Snapshot `versions/v36_LB0.86727/`; `submission.csv` = v36; README rows and the Task 4 description updated.
+* **Round 42, nested re-weighting of v36 (user brief 2026-11-20; `hp_r42_t4_reweight_v36.py`, 96 settings fixed before the run:
+  ViT-H+ {20, 30, 40} x DINOv3-L-144 {20, 10} x DINOv3-L-384 {20, 10} x RADIO {20, 10} (x2 gated kept) x older seven {x1, x0.5} x
+  probe {0.35, 0.30}; log `outputs/r42/hp_reweight_v36.log`).** N passes, narrowly: against v36 full +0.0003, zoom70 +0.0007, HUD
+  hidden +0.0008, **real dark +0.0001** (dark by fold +0.0000 -0.0018 +0.0016 +0.0000 +0.0005), zoom / HUD 5/5 folds. Every fold picks
+  ViT-H+ x40 with probe 0.30 and older x0.5; pipeline setting H 40 / D144 10 / D384 20 / RAD 10 / OLD 0.5 / PW 0.30 (in-sample +0.0003
+  / +0.0009 / +0.0011 / +0.0005) **sits on the grid edge in five of six factors** (not extended afterwards). It would move 303 test
+  labels (78 on gated frames) - almost as many as adding ViT-H+ - for about a quarter of round 41's re-weighting gain (v32: +0.0008 /
+  +0.0031 / +0.0042 / +0.0015, 483 labels, public +0.0012). One factor at a time, ViT-H+ x40 alone loses on the dark frames (-0.0004)
+  and lowering any one member alone does nothing: the gain needs the joint shift towards ViT-H+. Not built yet (the user decides).
+* **DINOv2-g/14 fine-tune prepared (user brief 2026-11-20; 190 CU left).** `python colab/build_t4_colab_nb.py dinov2g` ->
+  `colab/t4_colab_dinov2g.ipynb`: tag `dinov2g_126`, `vit_giant_patch14_reg4_dinov2.lvd142m` at 126 x 238, the user's recipe fixed
+  before the run (v30's DINOv2-L recipe with lr 2e-5, layer decay 0.90 over 40 blocks - block 0 at 0.015 of the head's lr -, 15
+  epochs, HUD dropout 0.70, batch 64, grad-ckpt on), fold 0 only, gate alone >= 0.9925 + v24 check; a VRAM smoke cell (one full
+  training step with AdamW and the EMA copy, asserting peak < 92% of the GPU) runs before the benchmark - executed verbatim on the
+  laptop with vit_small DINOv2 as a stand-in. CPU check: 569 / 569 parameters in the layer-decay groups, 158 tokens, about 21 GiB of
+  training state (A100 80 GB). Laptop fold-0 comparison `ho_r42_t4_dinov2g_fold0.py` (R in place of DINOv2-L with its x8 / x2 gate,
+  H x10, A x20, G x20 / x2 gated; `--ref v36` or `--ref v37` for the re-weighted setting), smoke-tested with a stand-in.
+  `em_r30_t4_hardviews.py` knows `dinov2g_126`; bundle rebuilt (35,113,750 bytes). ViT-H+ checkpoints (6, 20 GB) moved to the Drive
+  trash with the user's OK; v36 committed c6feb93 and pushed.
+* **v37 = 0.86815 (uploaded 2026-11-20 11:47 Thai time with the user's OK): +0.00088 over v36, the best public score, above the
+  stated range (0.8668-0.8680).** v37 = v36 with hp_r42's setting (ViT-H+ x40, DINOv3-L-144 x10, DINOv3-L-384 x20, C-RADIOv3-L x10 /
+  x2 gated, ConvNeXt-T / DeiT-III 0.25, HUD members 0.75, probe 0.30); nb_part2 (weights, PROBE_W4, the probe text) updated; Task 4
+  notebook rebuilt and executed (75 s, no errors; multipliers off); 303 Task 4 labels vs v36; the independent recomputation (now
+  reading PROBE_W4 as well) reproduces it exactly. Same pattern as round 41 (v32 +0.0012): moving weight onto the strongest member
+  helps the public score far more than its small out-of-fold deltas (+0.0003 / +0.0007 / +0.0008 / +0.0001) suggest - the test images
+  are where the members disagree. Snapshot `versions/v37_LB0.86815/`; `submission.csv` = v37; README rows and Task 4 description.
+* **Round 42, one extension of the v37 grid along its edge factors (user brief 2026-11-20, one run, grid fixed before the run:
+  ViT-H+ {40, 60, 80} x probe {0.20, 0.25, 0.30}, the rest at v37; `hq_r42_t4_reweight_v37.py`, log
+  `outputs/r42/hq_reweight_v37.log`): FAILS -> v37 stays.** No setting meets the rule in-sample. More ViT-H+ helps the real dark
+  frames (x60 / x80 at probe 0.30: dark +0.0010, full +0.0004 / +0.0005) but costs zoom70 (-0.0001 / -0.0005) and is flat on HUD
+  hidden; a lower probe weight (0.25 / 0.20) is flat or negative on HUD hidden. N (nested) picks v37 in folds 0-1 and x60-80 / probe
+  0.20 in folds 2-4: full +0.0002, zoom70 -0.0003, HUD hidden -0.0002, dark +0.0010 -> fail. Along these two axes v37 sits at the
+  out-of-fold optimum; the grid is not extended further (user's instruction).
