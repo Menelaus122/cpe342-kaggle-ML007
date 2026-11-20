@@ -13,6 +13,8 @@ Acceptance (user, 2026-11-16): hard-view mean (zoom70, HUD hidden, gamma 3.5, 75
 rule (pooled > 0, >= 3/5 folds, no fold below -0.0005 on the hard-view mean) is reported too.
 Round 31: a candidate without a checkpoint for some folds (a fold-0 test) gets views for the folds it has; scoring is then left to
 fc_r31_t4_v23_eval.py, which scores against v23 on the folds available.
+Round 37: with the environment variable VIEWS_ONLY set, only the candidates' views are written (no v20 members, no scoring);
+used on Colab, where the other members' files are not present.
 """
 import sys
 from pathlib import Path
@@ -34,10 +36,23 @@ ARCH = {"cnxt": ("convnext_tiny.in12k_ft_in1k", (160, 320)), "deit3": ("deit3_sm
         "dinov2_sam": ("vit_base_patch14_reg4_dinov2.lvd142m", (126, 238)),
         "cnxt_mix": ("convnext_tiny.in12k_ft_in1k", (160, 320)),
         "dinov2L": ("vit_large_patch14_reg4_dinov2.lvd142m", (126, 238)),
-        "dinov2_photo": ("vit_base_patch14_reg4_dinov2.lvd142m", (126, 238))}
+        "dinov2_photo": ("vit_base_patch14_reg4_dinov2.lvd142m", (126, 238)),
+        "cnxtB_hud": ("convnext_base.fb_in22k_ft_in1k", (160, 320)),
+        "dinov2L_lpft": ("vit_large_patch14_reg4_dinov2.lvd142m", (126, 238)),  # round 38: LP-FT (Colab)
+        "dinov2L_hud70": ("vit_large_patch14_reg4_dinov2.lvd142m", (126, 238)),  # round 39 step 3: HUD dropout 0.70, lr 3e-5 (Colab)
+        "cnxt_hud_lowlight": ("convnext_tiny.in12k_ft_in1k", (160, 320)),  # round 40: + low-light / noise and RGB channel shuffle
+        "dinov2L_hud70_s2": ("vit_large_patch14_reg4_dinov2.lvd142m", (126, 238)),  # round 40 step 3: second seed of dinov2L_hud70
+        "cnxt_hud_dark2": ("convnext_tiny.in12k_ft_in1k", (160, 320)),   # round 40 (revised): real dark / low-contrast rows x2
+        "cnxt_hud_dark3": ("convnext_tiny.in12k_ft_in1k", (160, 320)),   # ... x3
+        "dinov3L_hud70": ("vit_large_patch16_dinov3.lvd1689m", (144, 272)),
+        "dinov3L_lr8e5": ("vit_large_patch16_dinov3.lvd1689m", (144, 272)),  # round 40: DINOv3-L, lr 8e-5 / layer decay 0.90 / 18 epochs
+        "dinov3L_384": ("vit_large_patch16_dinov3.lvd1689m", (192, 384)),  # round 41: the same recipe at 192 x 384  # round 40 (revised): DINOv3 ViT-L/16, 9 x 17 patches
+        "cradio3L_384": ("c-radio_v3-l", (192, 384)),  # round 42: NVIDIA C-RADIOv3-L (src/task4.RadioClassifier), 12 x 24 patches
+        "dinov3Hp_144": ("vit_huge_plus_patch16_dinov3.lvd1689m", (144, 272)),  # round 42: DINOv3 ViT-H+/16, 9 x 17 patches
+        "dinov2g_126": ("vit_giant_patch14_reg4_dinov2.lvd142m", (126, 238))}  # round 42: DINOv2-g/14, 9 x 17 patches
 V20 = ["cnxt", "deit3", "cnxt_hud", "cnxt22k_hud", "effv2_hud", "deit3_hud", "cnxtS_hud", "dinov2_v2"]
 MEMBER_W = {"dinov2_v2": 3.0}
-REPLACES = {"dinov2_r2": "dinov2_v2", "dinov2_sam": "dinov2_v2", "dinov2_photo": "dinov2_v2", "dinov2L": "dinov2_v2"}
+REPLACES = {"dinov2_r2": "dinov2_v2", "dinov2_sam": "dinov2_v2", "dinov2_photo": "dinov2_v2", "dinov2L": "dinov2_v2", "dinov2L_lpft": "dinov2_v2", "dinov2L_hud70": "dinov2_v2"}
 CANDS = sys.argv[1:]
 V19, V30 = Path("experiments/claude/outputs/r19_views"), Path("experiments/claude/outputs/r30_views")
 V30.mkdir(parents=True, exist_ok=True)
@@ -73,7 +88,8 @@ FN = {"full": lambda x: x, "zoom70": lambda x: zoom(x, 0.7), "centre_grey": cent
 train, _ = task4.load_frames()
 y = train.label.values
 folds = [np.load(PRED_DIR / f"t4_cnxt_fold{f}.npz")["val_idx"] for f in range(5)]
-for tag in V20 + CANDS:
+VIEWS_ONLY = bool(__import__('os').environ.get('VIEWS_ONLY'))     # round 37 (Colab): only the candidates' views, no scoring
+for tag in ([] if VIEWS_ONLY else V20) + CANDS:
     views = ["dark_g35", "grid75"] if tag in V20 else ALL5
     name, size = ARCH[tag]
     for f, va in enumerate(folds):
@@ -99,6 +115,8 @@ for tag in V20 + CANDS:
         del m, arr
         torch.cuda.empty_cache()
 
+if VIEWS_ONLY:
+    sys.exit(0)
 partial = [t for t in CANDS if any(not (V30 / f"{t}_fold{f}.npz").exists() for f in range(5))]
 if partial:
     sys.exit(f"views written; {partial} lack some folds, so score them with fc_r31_t4_v23_eval.py (v23 base, partial folds)")

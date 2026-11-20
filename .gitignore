@@ -35,3 +35,6 @@ experiments/**/*.csv
 
 # ---- CatBoost training scratch
 catboost_info/
+
+# ---- Colab upload bundle (scripts/make_colab_bundle.py; contains the competition images)
+colab/upload/

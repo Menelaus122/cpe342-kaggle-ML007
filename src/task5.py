@@ -526,36 +526,182 @@ class DensityRatio:
         return out / len(self.fits)
 
 
-def pocket_density_ratio(X, known, cols, h=0.40, reps=20, n_perm=300, max_k=3000, seed=SEED):
-    """Pocket score = cross-fitted density ratio of `cols` (normal scores of the ranks among the accounts not in `known`), with the
-    same shuffle-null estimate of the true members among the top k as pocket_detector (null points are scored with a random half's
-    fit). Returns (account indices in score order, est_TP curve of length max_k, score of the accounts not in `known`)."""
+def density_ratio_curve(V, h=0.40, reps=200, n_perm=1000, max_k=3000, seed=SEED, block=100):
+    """Cross-fitted density-ratio score of the rows of V (rows x d, d = 2, 3 or 4; NaN sits at the median) with the shuffle-null
+    estimate of the true members among the top k.
+
+    Normal scores of the ranks; histogram bins of 0.05 / 0.1 / 0.2 SD for d = 2 / 3 / 4, Gaussian smoothing of h SD on the observed
+    counts and on the expected counts of independent columns. Each of `reps` random halvings fits one map per half; a row is scored
+    by the map of the half it is NOT in, and the maps are discarded after use (streaming), so hundreds of halvings fit in memory.
+    Null: `n_perm` column shuffles, fixed in advance; every null row is scored by a random half's map in every halving.
+    Defaults (round 32): 200 halvings and 1000 null draws; with v24's 20 / 300 the cut-off moved by up to 25 accounts between seeds,
+    with 200 / 1000 k* is 263-265 over five seeds (Jaccard 0.9925-1.000, mean 0.997).
+    Returns (row order by score, est_TP curve of length max_k, score)."""
+    from functools import reduce
+    from scipy.ndimage import gaussian_filter
     from scipy.stats import norm
     rng = np.random.default_rng(seed)
-    known = np.asarray(known, bool)
-    rest = np.where(~known)[0]
-    n = len(rest)
-    Rk = X.loc[~known, cols].rank(method="first").to_numpy()
-    Z = np.nan_to_num(norm.ppf((Rk - 0.5) / n))                       # a missing value sits at the median
-    D = DensityRatio(Z, h, rng, reps)
-    S = D.score(Z)
+    V = np.asarray(V, float)
+    n, d = V.shape
+    Rk = pd.DataFrame(V).rank(method="first").to_numpy()
+    Z = np.nan_to_num(norm.ppf((Rk - 0.5) / n))
+    w = {2: 0.05, 3: 0.1, 4: 0.2}[d]
+    edges = np.arange(-4.2, 4.2 + 1e-9, w)
+    nb = len(edges) - 1
+    p = np.diff(norm.cdf(np.r_[-np.inf, edges[1:-1], np.inf]))
+    sig = h / w
+    eps = 0.5 / ((2 * np.pi) ** (d / 2) * sig ** d)
+    fE1 = gaussian_filter(reduce(np.multiply.outer, [p] * d), sig, mode="constant").ravel()      # smoothed expected counts per row
+
+    def flat(Zx):
+        idx = np.clip(((np.clip(Zx, -4.199, 4.199) + 4.2) / w).astype(int), 0, nb - 1)
+        return np.ravel_multi_index(tuple(idx.T), (nb,) * d)
+
+    fi = flat(Z)
+    NI = np.stack([flat(_shuffle_columns(Z, rng)) for _ in range(n_perm)]).astype(np.int32)
+    S = np.zeros(n)
+    SN = np.zeros((n_perm, n), np.float32)
+    for _ in range(reps):
+        half = rng.random(n) < 0.5
+        maps = []
+        for m in (half, ~half):
+            H = np.bincount(fi[m], minlength=nb ** d).reshape((nb,) * d).astype(float)
+            maps.append(np.log((gaussian_filter(H, sig, mode="constant").ravel() + eps) / (m.sum() * fE1 + eps)))
+        LA, LB = maps
+        S += np.where(half, LB[fi], LA[fi])
+        for j in range(0, n_perm, block):
+            idx = NI[j:j + block]
+            SN[j:j + block] += np.where(rng.random(idx.shape) < 0.5, LB[idx], LA[idx])
+    S /= reps
     order = np.argsort(-S)
     Ss = S[order]
     cnt = np.zeros(n)
-    for _ in range(n_perm):
-        Zp = _shuffle_columns(Z, rng)
-        Sp = np.sort(D.score(Zp, [rng.random(n) < 0.5 for _ in D.fits]))
+    for j in range(n_perm):
+        Sp = np.sort(SN[j].astype(float) / reps)
         cnt += n - np.searchsorted(Sp, Ss, side="left")
     cnt /= n_perm
     est = np.maximum.accumulate(np.arange(1, n + 1) - cnt)
-    return rest[order], est[:max_k], S
+    return order, est[:max_k], S
 
 
-def pocket_refine(X, known, pocket, pinfo, feats, max_k=3000, beta=3.0, seed=SEED):
+def pocket_density_ratio(X, known, cols, h=0.40, reps=200, n_perm=1000, max_k=3000, seed=SEED):
+    """Pocket score = density_ratio_curve of `cols` over the accounts not in `known`.
+    Returns (account indices in score order, est_TP curve of length max_k, score of the accounts not in `known`)."""
+    known = np.asarray(known, bool)
+    rest = np.where(~known)[0]
+    order, est, S = density_ratio_curve(X.loc[~known, cols].to_numpy(float), h, reps, n_perm, max_k, seed)
+    return rest[order], est, S
+
+
+# --------------------------------------------------------------------------- pocket shape (c): the whole period profile
+# The pocket's members are high in EVERY period of its behaviours (round 32), which the all-period mean (_level) only partly uses.
+# A level and a spread of the same behaviour are dependent for normal accounts too, so the column-shuffle null is not valid for
+# per-period columns. Valid null: shuffle whole behaviour BLOCKS (a behaviour's four periods stay together), which keeps every
+# within-behaviour dependence and removes only the dependence across behaviours, the same hypothesis as the 3-D null.
+# Setting picked from four on the label-free expected F3 of a 6-halving run (round 32, fk_r32_t5_pocket_12d.py). No early stopping:
+# a validation part only breaks the exact 1 : m balance of the block values by chance.
+PROFILE_CLF = dict(learning_rate=0.03, max_iter=300, max_leaf_nodes=8, min_samples_leaf=200, l2_regularization=1.0, early_stopping=False)
+
+
+def _nscore(v):
+    """Normal score of the rank among the non-missing rows; missing stays NaN (the classifier routes it natively)."""
+    from scipy.stats import norm
+    r = pd.Series(v).rank(method="first").to_numpy()
+    return norm.ppf((r - 0.5) / np.sum(~np.isnan(v)))
+
+
+def profile_block(P):
+    """Features of one behaviour from its periods only (rows x periods): the normal score of each period, of the period mean (the
+    _level column), and the min / max / SD of the observed period scores."""
+    import warnings
+    Zp = np.column_stack([_nscore(P[:, j]) for j in range(P.shape[1])])
+    with np.errstate(all="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        lev = _nscore(np.nanmean(P, 1))
+        return np.column_stack([Zp, lev, np.nanmin(Zp, 1), np.nanmax(Zp, 1), np.nanstd(Zp, 1)]).astype(np.float32)
+
+
+def _profile_rows(blocks, n_periods=4):
+    """One row per account from its (possibly shuffled) blocks: the block features plus across-behaviour summaries. A split on a
+    single block feature has exactly zero gain (every block value sits in 1 real and m shuffled training rows), so greedy trees need
+    the across-behaviour columns to start: min / mean / max of the level scores, min and mean of the per-behaviour lowest period
+    scores, and the number of periods in the top 20% over all behaviours."""
+    Xb = np.hstack(blocks)
+    w = blocks[0].shape[1]
+    L, Mn = Xb[:, n_periods::w], Xb[:, n_periods + 1::w]
+    P = np.hstack([b[:, :n_periods] for b in blocks])
+    with np.errstate(all="ignore"):
+        cross = np.column_stack([L.min(1), L.mean(1), L.max(1), Mn.min(1), Mn.mean(1), np.nansum(P > 0.8416, axis=1)])
+    return np.hstack([Xb, cross.astype(np.float32)])
+
+
+def profile_ratio_curve(blocks, reps=40, n_perm=200, m=3, max_k=3000, seed=SEED):
+    """Cross-fitted classifier estimate of the log density ratio "real accounts" against "behaviour blocks shuffled independently",
+    with the block-shuffle estimate of the true members among the top k.
+
+    `blocks`: one profile_block array per behaviour. Each of `reps` random halvings fits one gradient-boosted classifier per half
+    (real rows of the half against m block shuffles of the same half; log-odds = log ratio + constant); a real row is scored by the
+    classifier of the half it is NOT in, scores averaged over the halvings. Null: `n_perm` block shuffles of all rows, fixed in
+    advance; every null row is scored by a random half's classifier in every halving (as in density_ratio_curve).
+    Returns (row order by score, est_TP curve of length max_k, score)."""
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    rng = np.random.default_rng(seed)
+    n = len(blocks[0])
+    perms = np.stack([np.stack([rng.permutation(n) for _ in blocks]) for _ in range(n_perm)]).astype(np.int32)
+    real = _profile_rows(blocks)
+    S = np.zeros(n)
+    SN = np.zeros((n_perm, n), np.float32)
+    for _ in range(reps):
+        half = rng.random(n) < 0.5
+        models = []
+        for hm in (half, ~half):
+            idx = np.where(hm)[0]
+            Xs = [real[idx]] + [_profile_rows([f[idx[rng.permutation(len(idx))]] for f in blocks]) for _ in range(m)]
+            yy = np.r_[np.ones(len(idx)), np.zeros(m * len(idx))]
+            models.append(HistGradientBoostingClassifier(**PROFILE_CLF, random_state=int(rng.integers(2**31 - 1))).fit(np.vstack(Xs), yy))
+        mA, mB = models
+        S[half] += mB.decision_function(real[half])
+        S[~half] += mA.decision_function(real[~half])
+        for j in range(n_perm):
+            Xn = _profile_rows([f[perms[j, b]] for b, f in enumerate(blocks)])
+            pick = rng.random(n) < 0.5
+            SN[j, pick] += mB.decision_function(Xn[pick])
+            SN[j, ~pick] += mA.decision_function(Xn[~pick])
+    S /= reps
+    order = np.argsort(-S)
+    Ss = S[order]
+    cnt = np.zeros(n)
+    for j in range(n_perm):
+        Sp = np.sort(SN[j].astype(float) / reps)
+        cnt += n - np.searchsorted(Sp, Ss, side="left")
+    cnt /= n_perm
+    est = np.maximum.accumulate(np.arange(1, n + 1) - cnt)
+    return order, est[:max_k], S
+
+
+def pocket_profile_ratio(df, known, cols, reps=40, n_perm=200, max_k=3000, seed=SEED):
+    """Pocket score = profile_ratio_curve of the per-period columns behind the _level columns `cols`, over the accounts not in `known`.
+    Returns (account indices in score order, est_TP curve, score of the accounts not in `known`), or None if a column of `cols` is
+    not an all-period level with its four period columns in df."""
+    known = np.asarray(known, bool)
+    rest = np.where(~known)[0]
+    beh = [c[:-len("_level")] for c in cols if c.endswith("_level")]
+    if len(beh) != len(cols) or any(f"{b}_{i}" not in df.columns for b in beh for i in range(1, 5)):
+        return None
+    sub = df.iloc[rest]
+    blocks = [profile_block(sub[[f"{b}_{i}" for i in range(1, 5)]].to_numpy(float)) for b in beh]
+    order, est, S = profile_ratio_curve(blocks, reps, n_perm, 3, max_k, seed)
+    return rest[order], est, S
+
+
+def pocket_refine(X, known, pocket, pinfo, feats, max_k=3000, beta=3.0, seed=SEED, reps=200, n_perm=1000, df=None,
+                  profile_reps=40, profile_perm=200):
     """Second pass of the pocket: (a) one more column if the provisional pocket is shifted in it (pocket_extra_column), then (b) the
     cross-fitted density ratio of the pocket columns against the min-rank score. The two est_TP curves are compared at ONE common
     group size (the larger estimate, so a weak score is not rewarded for under-estimating the group); the score with the higher
     expected F_beta is kept, cut at its own maximum. Without a further column the min-rank pocket is returned unchanged.
+    With `df` (the raw table) a third score joins the comparison: (c) the cross-fitted classifier ratio on the whole period
+    profile of the pocket's behaviours against the block-shuffle null (pocket_profile_ratio).
     Returns (flags over all accounts, info dict)."""
     known = np.asarray(known, bool)
     extra, tab, bound = pocket_extra_column(X, known, pocket, feats)
@@ -563,13 +709,18 @@ def pocket_refine(X, known, pocket, pinfo, feats, max_k=3000, beta=3.0, seed=SEE
     if extra is None:
         return np.asarray(pocket, bool), {**pinfo, **info}
     cols = list(feats) + [extra]
-    order_r, est_r, _ = pocket_density_ratio(X, known, cols, max_k=max_k, seed=seed)
+    order_r, est_r, _ = pocket_density_ratio(X, known, cols, reps=reps, n_perm=n_perm, max_k=max_k, seed=seed)
     est_m = pinfo["curve"].est_tp.to_numpy()
     n_known, b2 = int(known.sum()), beta ** 2
-    G = max(float(est_m.max()), float(est_r.max()))
+    cands = [("min-rank", est_m, pinfo["order"]), ("density ratio", est_r, order_r)]
+    prof = (pocket_profile_ratio(df, known, cols, reps=profile_reps, n_perm=profile_perm, max_k=max_k, seed=seed)
+            if df is not None else None)
+    if prof is not None:
+        cands.append(("period-profile ratio", prof[1], prof[0]))
+    G = max(float(est.max()) for _, est, _ in cands)
     k = np.arange(1, max_k + 1)
     curves = {}
-    for name, est, order in (("min-rank", est_m, pinfo["order"]), ("density ratio", est_r, order_r)):
+    for name, est, order in cands:
         f = (1 + b2) * (n_known + est) / (b2 * (n_known + G) + n_known + k)
         ks = int(np.argmax(f)) + 1
         curves[name] = dict(k=ks, est_tp=float(est[ks - 1]), precision=float(est[ks - 1] / ks), expected_f=float(f[ks - 1]),
@@ -578,7 +729,9 @@ def pocket_refine(X, known, pocket, pinfo, feats, max_k=3000, beta=3.0, seed=SEE
     c = curves[best]
     flags = np.zeros(len(known), bool)
     flags[c["order"][:c["k"]]] = True
-    comp = pd.DataFrame({m: {"columns": " x ".join(feats if m == "min-rank" else cols), "estimated group size": v["group_size"],
+    shown = {"min-rank": " x ".join(feats), "density ratio": " x ".join(cols),
+             "period-profile ratio": "the 4 periods of " + ", ".join(c[:-len("_level")] for c in cols)}
+    comp = pd.DataFrame({m: {"columns": shown[m], "estimated group size": v["group_size"],
                              "cut-off k": v["k"], "estimated members": v["est_tp"], "estimated precision": v["precision"],
                              f"expected F{beta:g} (common group size)": v["expected_f"]} for m, v in curves.items()}).T
     info.update(method=best, cols=list(feats) if best == "min-rank" else cols, k=c["k"], est_tp=c["est_tp"], precision=c["precision"],

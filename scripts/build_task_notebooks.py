@@ -326,7 +326,8 @@ def task_cells(k):
                       "followed by a median-consistent zero gate and one scale factor."))
     elif k == 4:
         md(section(7, "Fold models of architecturally different backbones are averaged in probability space (the fine-tuned DINOv2 "
-                      "ViT-B/14 counts three times; a logistic probe on frozen foundation features is mixed in at 10%). Class-wise decision "
+                      "ViT-B/14 counts eight times, each HUD-dropout member three times, the DINOv2 ViT-L/14 member eight times on normal frames and twice on dark / "
+                      "low-contrast ones (a per-image brightness / contrast gate); an MLP probe on frozen features of seven foundation backbones is mixed in at 35%). Class-wise decision "
                       r"multipliers $\hat y=\arg\max_c w_c P_{ic}$ tuned on the OOF blend are reported but fail the nested check; the final "
                       r"label uses the balanced-prior rule $\hat y=\arg\max_c p_c\,\pi_c^{-0.75}$ with the training class shares $\pi$."))
     else:
