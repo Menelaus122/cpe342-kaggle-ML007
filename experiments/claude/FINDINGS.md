@@ -3592,3 +3592,12 @@ x10, A added x20; written before the run; `--probe p8 --pw w` if part A changes 
   checkpoints (17 GB) moved to the Drive trash (the full refit does not need them); the user runs the dinov3Hp_384 full refit on
   Colab (same notebook, `FOLDS = []`, `DO_FULL = True`, about 3 h on an A100); one nested re-weighting round around v38 on the CPU
   with a grid fixed before the run (`hv_r42_t4_reweight_v38.py`).
+* **Round 42, nested re-weighting around v38 (`hv_r42_t4_reweight_v38.py`, user's grid fixed before the run: H384 {40, 60} x H144
+  {20, 40} x D384 {10, 20} x probe {0.20, 0.25, 0.30} x older {x1, x0.5} = 48 settings; log `outputs/r42/hv_reweight_v38.log`; 28 s):
+  N FAILS -> v38 stays.** Reference reproduces v38 (full 0.9956, zoom70 0.9890, HUD hidden 0.9821, dark 0.9890). Every fold moved
+  ViT-H+ 192x384 to x60 (and mostly H144 20, D384 10, probe 0.20, older x0.5), but N: full +0.0002, zoom70 +0.0004, HUD hidden
+  +0.0005, **dark -0.0004** (fold 1 -0.0026), zoom / HUD by fold +0.0008 +0.0009 +0.0003 -0.0001 +0.0005 -> fail. In-sample several
+  settings pass (best criterion H384 60 H144 20 D384 10 PW 0.25 OLD x1: +0.0003 / +0.0008 / +0.0008 / +0.0002, at the far edge in three
+  factors), but the nested estimate does not carry the dark-frame gain; one factor at a time, H384 60 alone +0.0002 / +0.0002 / +0.0004 /
+  -0.0002 fails. Unlike v32 / v37 (where N passed), the extra weight on the strongest member is not supported out of fold; no grid
+  extension (one run).
