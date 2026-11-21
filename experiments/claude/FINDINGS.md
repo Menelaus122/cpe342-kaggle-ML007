@@ -3520,3 +3520,75 @@ x10, A added x20; written before the run; `--probe p8 --pw w` if part A changes 
   hidden; a lower probe weight (0.25 / 0.20) is flat or negative on HUD hidden. N (nested) picks v37 in folds 0-1 and x60-80 / probe
   0.20 in folds 2-4: full +0.0002, zoom70 -0.0003, HUD hidden -0.0002, dark +0.0010 -> fail. Along these two axes v37 sits at the
   out-of-fold optimum; the grid is not extended further (user's instruction).
+* **Round 42, DINOv2-g/14 (`dinov2g_126`) fold 0 (Colab A100 80 GB, 05:07-06:39 UTC, 333 s/epoch x 15; files validated:
+  macro-F1 0.9943 = log, val_idx / test order = pipeline, views complete; test argmax agreement with DINOv2-L 0.936).** Alone (TTA)
+  0.9943 on fold 0 (ViT-H+ 0.9960, DINOv3-L-144 0.9925, DINOv2-L 0.9885); balanced / rule full 0.9947, zoom70 0.9868, HUD hidden
+  0.9805, dark 0.9870 (ViT-H+ 0.9958 / 0.9887 / 0.9811 / 0.9896; DINOv2-L 0.9884 / 0.9772 / 0.9614 / 0.9807). Notebook gate PASS (alone
+  >= 0.9925; v24 check passes at every weight). `ho_r42_t4_dinov2g_fold0.py --ref v37` (variants fixed before the run; log
+  `outputs/r42/ho_dinov2g_fold0.log`): R (in place of DINOv2-L, x8 / x2) +0.0000 / +0.0000 / +0.0006 / +0.0000 fail; H (x10) +0.0000 /
+  -0.0002 / -0.0003 / +0.0000 fail; **A (x20) -0.000000 / +0.000127 / +0.000921 / +0.000033 -> fold-0 rule PASS** (1 full-frame label
+  changes - a dark frame, which carries the dark delta -, 9 on zoom70, 17 on HUD hidden); G (x20 / x2 gated) +0.0000 / -0.0000 / +0.0007 /
+  +0.0000 fail. By the rule folds 1-4 are worth their compute, but the fold-0 effect inside v37 is tiny (mostly HUD hidden): the
+  ViT-H+-weighted ensemble is close to saturated out of fold. Folds 1-4 + full refit: about 7.5 A100 hours (the user decides).
+* **Round 42, DINOv2-g/14 on all five folds (Colab 05:07-12:39 UTC; full refit started 12:40 UTC) judged by `hr_r42_t4_dinov2g_eval.py`,
+  written before any fold 1-4 result existed (log `outputs/r42/hr_dinov2g_eval.log`): FAILS against v37 -> v37 stays.** Files
+  validated (macro-F1 = log on every fold). Alone (TTA) 0.9943 / 0.9953 / 0.9936 / 0.9945 / 0.9937 - second-best member; 5-fold balanced
+  / rule full 0.9939, zoom70 0.9859, HUD hidden 0.9774, real dark 0.9815, normal frames 0.9957 (ViT-H+ 0.9948 / 0.9868 / 0.9780 / 0.9849 /
+  0.9962). Against v37 (full / zoom70 / HUD hidden / dark): R (in place of DINOv2-L, x8 / x2) +0.0001 / +0.0001 / +0.0007 / +0.0000;
+  H (x10) +0.0001 / +0.0001 / +0.0002 / -0.0001; A (x20) +0.0001 / +0.0004 / +0.0007 / -0.0003 (dark by fold 0, -0.0004, -0.0018,
+  -0.0002, +0.0006); G (x20 / x2 gated) +0.0001 / +0.0001 / +0.0006 / +0.0000; all fail; N picks none / H / A / none / none -> full
+  -0.0000, zoom70 +0.0002, HUD hidden +0.0003, dark -0.0007 -> fail. Fold 0's hair-thin pass of A (one label) did not hold on folds 1-4:
+  DINOv2-g adds a little on zoom / HUD-hidden frames but is weaker than ViT-H+ on the dark frames, and the gated variants are exactly
+  neutral there. The running full refit is not needed (the user can stop it to save compute).
+* **Round 42, third frozen-probe screen (`if_r42_t4_screen3.py`; rule as id_r42 / ie_r42, fixed before the run; probe-only run on the
+  cached features at the user's request, log `outputs/r42/if_screen3_probe_only.log`).** The first run was stopped by Claude Code for low
+  system memory while loading C-RADIOv3-H (the three timm models' features were already cached); the restart was stopped by the user's
+  choice to skip RADIO-H, so C-RADIOv3-H was not measured. At the 12 x 24 token grid (168 x 336 for patch 14), against DINOv3-L @ 192 x 384
+  (0.9400 / 0.8831): AIMv2-L (`aimv2_large_patch14_224.apple_pt`) 0.8937 / 0.8085 (-0.0464 / -0.0746); PE-Core-L
+  (`vit_pe_core_large_patch14_336.fb`) 0.9297 / 0.8618 (-0.0104 / -0.0213); PE-Spatial-L (`vit_pe_spatial_large_patch14_448.fb`) 0.9084 /
+  0.8460 (-0.0316 / -0.0371) -> no clear win; all three far below ViT-H+ (0.9486 / 0.8927) and DINOv2-g (0.9454 / 0.8944). None is worth a
+  fine-tune.
+* **ViT-H+ at 192 x 384 prepared (user brief 2026-11-20; the user's recipe, fixed before the run: lr 8e-5, layer decay 0.93, 18 epochs,
+  HUD dropout 0.70, batch 64, grad-ckpt, fold 0 only).** Laptop checks: `vit_huge_plus_patch16_dinov3.lvd1689m` at 192 x 384 gives a 12 x 24
+  grid + 5 prefix tokens (293); it has no position table (RoPE only, `RotaryEmbeddingDinoV3`), and the fixed 192 x 384 model equals timm's
+  dynamic-size path on the same weights (max |diff| 0); layer decay 0.93 groups 488 / 488 parameters, block 0 at 0.098 of the head's lr
+  (0.90: 0.034); estimated peak about 22 GiB at batch 64 with grad-ckpt (15.7 GiB of training state + 2.9 GiB of checkpointed block
+  inputs). `python colab/build_t4_colab_nb.py dinov3h384` -> `colab/t4_colab_dinov3h384.ipynb`: tag `dinov3Hp_384`, gate alone >= 0.9960
+  (dinov3Hp_144's fold 0) + v24 check, a VRAM smoke cell (one full step with AdamW + EMA; executed verbatim on the laptop with
+  vit_small DINOv3 as a stand-in). Laptop fold-0 comparison with v37 `ht_r42_t4_dinov3h384_fold0.py` (R in place of dinov3Hp_144 at x40,
+  H both x20, A20, A40; written before the run; smoke-tested with a stand-in, v37's fold-0 reference reproduced). `em_r30_t4_hardviews.py`
+  knows `dinov3Hp_384`; bundle rebuilt (35,113,767 bytes). DINOv2-g checkpoints (5, 22.7 GB; its full refit was stopped) moved to the
+  Drive trash with the user's OK.
+* **Round 42, ViT-H+ at 192 x 384 fold 0 on Colab (finished 05:49 UTC 2026-11-21, A100, 480 s/epoch - faster than the 550-600 s
+  estimate; files fetched from Drive and validated: macro-F1 0.9963 = log, val_idx / test order = pipeline, five views, views' full =
+  val_probs): strongest single model so far, notebook gate PASS, and all four pre-declared variants pass the fold-0 rule against v37.**
+  Alone on fold 0 (TTA) **0.9963** (dinov3Hp_144 0.9960); balanced / rule full / zoom70 / HUD hidden / dark 0.9967 / 0.9898 / 0.9857 /
+  0.9918 vs dinov3Hp_144 0.9958 / 0.9887 / 0.9811 / 0.9896 and v37 itself 0.9949 / 0.9893 / 0.9813 / 0.9878 (fold 0 flatters ViT-H+:
+  dinov3Hp_144 alone also beat v37 on fold 0 but not over five folds). Test argmax agreement with dinov3Hp_144 0.966. `ht_r42` (log
+  `outputs/r42/ht_dinov3h384_fold0.log`): **R (in place of dinov3Hp_144 at x40) +0.0005 / +0.0008 / +0.0025 / +0.0012**, H (both x20)
+  +0.0002 / +0.0006 / +0.0008 / +0.0012, A20 +0.0001 / +0.0006 / +0.0012 / +0.00003, A40 +0.0003 / +0.0013 / +0.0022 / +0.00001 (A20 /
+  A40 pass on dark by the letter only); labels changed on full frames 2-5, so the signal is a handful of images. Five-fold judge
+  `hu_r42_t4_dinov3h384_eval.py` written before folds 1-4 (same four variants + N nested, user's rule, >= 3/5 folds); smoke-tested with
+  dinov2g_126 as a stand-in, reproducing hr_r42's A exactly. Folds 1-4 about 9.8 h on an A100; full refit (31.5k images) about 3 h more;
+  without it the member's test input is the five-fold mean (nb_part2 fallback).
+* **Round 42, ViT-H+ at 192 x 384 on all five folds (Colab A100, folds 1-4 05:55-16:11 UTC 2026-11-21; no full refit - the user's CU
+  ran low) judged by `hu_r42_t4_dinov3h384_eval.py`, written before folds 1-4 were trained (log `outputs/r42/hu_dinov3h384_eval.log`):
+  PASSES -> v38 = 0.86891, best public.** Files validated (macro-F1 = log on every fold, val_idx / test order = pipeline, five views,
+  views' full = val_probs, 18 epochs each). Alone (TTA) 0.9963 / 0.9961 / 0.9956 / 0.9958 / 0.9953 - the best member on every fold
+  (dinov3Hp_144 0.9960 / 0.9950 / 0.9953 / 0.9946 / 0.9948); 5-fold balanced / rule full 0.9959, zoom70 0.9889, HUD hidden 0.9828,
+  real dark 0.9874, normal frames 0.9972 (dinov3Hp_144 0.9948 / 0.9868 / 0.9780 / 0.9849 / 0.9962). Against v37 (full / zoom70 / HUD
+  hidden / dark): R (in place of dinov3Hp_144 x40) +0.0003 / +0.0009 / +0.0022 / +0.0004 (dark by fold +0.0012 -0.0019 -0.0003 +0.0000
+  +0.0025) PASS; H (both x20) +0.0001 / +0.0005 / +0.0010 / -0.0002 fail; A20 +0.0005 / +0.0005 / +0.0012 / +0.0011 PASS; **A40 +0.0007 /
+  +0.0007 / +0.0021 / +0.0012, dark by fold +0.0000 +0.0013 +0.0015 +0.0011 +0.0018 PASS**; N picks A40 / R / A40 / A40 / A40 -> full
+  +0.0006, zoom70 +0.0008, HUD hidden +0.0019, dark +0.0006, zoom / HUD by fold +0.0017 +0.0011 +0.0010 +0.0018 +0.0012 -> PASS;
+  pipeline variant A40. Pipeline: `dinov3Hp_384` x40 on every frame added to `T4_MEMBER_W` (nb_part2; registry entry 192 x 384);
+  test input = 5-fold mean (no `_full.npz`). Task 4 notebook rebuilt and executed (60 s; OOF argmax 0.9948 -> 0.9955; class
+  multipliers stay off: nested 0.9954 < 0.9955), task1 / task3 executions restored. `submission_v38.csv`: only Task 4 differs from
+  v37 (207 labels; class counts 3459 / 7254 / 3884 / 6144 / 5148 -> 3444 / 7276 / 3880 / 6130 / 5159); the independent recomputation
+  (`repro_t4.py`) gives v37 exactly without the member and v38 exactly with it. Predicted before the upload from the LB gain per changed
+  label of v33 / v36 / v37: +0.0004..+0.0008. **Public 0.86891 (+0.00076 over v37), inside the prediction; best public score.**
+  Snapshot `versions/v38_LB0.86891/` (preds pruned to the v36 keep list + the new member, 247 MB); `submission.csv` = v38.
+* **User decisions after v38 (2026-11-21):** final Kaggle picks = **v38 + v37** (replacing v37 + v36); the five dinov3Hp_384 fold
+  checkpoints (17 GB) moved to the Drive trash (the full refit does not need them); the user runs the dinov3Hp_384 full refit on
+  Colab (same notebook, `FOLDS = []`, `DO_FULL = True`, about 3 h on an A100); one nested re-weighting round around v38 on the CPU
+  with a grid fixed before the run (`hv_r42_t4_reweight_v38.py`).

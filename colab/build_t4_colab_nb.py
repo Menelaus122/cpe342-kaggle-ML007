@@ -4,7 +4,8 @@ import sys
 import nbformat as nbf
 
 PROFILE = sys.argv[1] if len(sys.argv) > 1 else "seed2"     # seed2 -> colab/t4_colab_train.ipynb; dinov3 -> colab/t4_colab_dinov3.ipynb;
-assert PROFILE in ("seed2", "dinov3", "dinov3b", "dinov3c", "radio3", "dinov3h", "dinov2g"), PROFILE   # dinov2g ->
+assert PROFILE in ("seed2", "dinov3", "dinov3b", "dinov3c", "radio3", "dinov3h", "dinov2g", "dinov3h384"), PROFILE   # dinov3h384 ->
+# colab/t4_colab_dinov3h384.ipynb (round 42: DINOv3 ViT-H+/16 at 192 x 384, layer decay 0.93, fold 0 only)   # dinov2g ->
 # colab/t4_colab_dinov2g.ipynb (round 42: DINOv2-g/14 at 126 x 238, DINOv2-L recipe with lr 2e-5 / layer decay 0.90, fold 0 only)   # dinov3b -> colab/t4_colab_dinov3b.ipynb (DINOv3 at lr 8e-5,
 # fold 0 only); dinov3c -> colab/t4_colab_dinov3c.ipynb (round 41: the same DINOv3 recipe at 192 x 384, fold 0 only); radio3 ->
 # colab/t4_colab_radio3.ipynb (round 42: NVIDIA C-RADIOv3-L at 192 x 384 with the dinov3c recipe, fold 0 only); dinov3h ->
@@ -346,7 +347,7 @@ if TRAIN and TAG == "dinov2L_hud70_s2":
 """.strip("\n"))
     k = next(i for i, c in enumerate(nb.cells) if c.cell_type == "code" and c.source.lstrip().startswith("# ---- what to copy back"))
     nb.cells.insert(k, soup_cell)
-if PROFILE in ("dinov3", "dinov3b", "dinov3c", "radio3", "dinov3h"):
+if PROFILE in ("dinov3", "dinov3b", "dinov3c", "radio3", "dinov3h", "dinov3h384"):
     out_path = "colab/t4_colab_dinov3.ipynb"
     nb.cells[0].source = nb.cells[0].source.replace(
         "# CPE342 Task 4: GPU training on Colab (round 40 step 3: a second seed of the v30 DINOv2-L member; all folds + full refit)",
@@ -396,7 +397,7 @@ torch.cuda.empty_cache()
 """.strip("\n"))
     k = next(i for i, c in enumerate(nb.cells) if c.cell_type == "code" and c.source.lstrip().startswith("# ---- 1-epoch benchmark"))
     nb.cells.insert(k, check)
-if PROFILE in ("dinov3b", "dinov3c", "radio3", "dinov3h"):
+if PROFILE in ("dinov3b", "dinov3c", "radio3", "dinov3h", "dinov3h384"):
     out_path = "colab/t4_colab_dinov3b.ipynb"
     nb.cells[0].source = nb.cells[0].source.replace(
         "# CPE342 Task 4: GPU training on Colab (round 40, revised: DINOv3 ViT-L/16 with v30's recipe; fold 0 + gate, then folds 1-4 + full refit)",
@@ -524,7 +525,7 @@ assert n_ckpt[0] == (n_blocks if GRAD_CKPT else 0), f"gradient checkpointing: {n
 del m, out, x
 torch.cuda.empty_cache()
 """.strip("\n")
-if PROFILE == "dinov3h":
+if PROFILE in ("dinov3h", "dinov3h384"):
     out_path = "colab/t4_colab_dinov3h.ipynb"
     nb.cells[0].source = nb.cells[0].source.replace(
         "# CPE342 Task 4: GPU training on Colab (round 40: DINOv3 ViT-L/16, new recipe lr 8e-5 / layer decay 0.90 / 18 epochs; fold 0 only)",
@@ -621,6 +622,69 @@ print(f"{len(m.blocks)} blocks, {sum(p.numel() for p in m.parameters()) / 1e6:.0
       f"peak GPU memory of one training step (batch 64, AdamW, EMA copy) {peak:.1f} of {total:.0f} GiB")
 assert peak < 0.92 * total, "too close to the GPU memory: use an A100 80 GB (or ACCUM = 2)"
 del m, ema, opt, out, x, tokens
+torch.cuda.empty_cache()
+""".strip("\n"))
+    k = next(i for i, c in enumerate(nb.cells) if c.cell_type == "code" and c.source.lstrip().startswith("# ---- 1-epoch benchmark"))
+    nb.cells.insert(k, smoke)
+if PROFILE == "dinov3h384":
+    out_path = "colab/t4_colab_dinov3h384.ipynb"
+    nb.cells[0].source = nb.cells[0].source.replace(
+        "# CPE342 Task 4: GPU training on Colab (round 42: DINOv3 ViT-H+/16 at 144x272 with the dinov3b recipe; fold 0 only)",
+        "# CPE342 Task 4: GPU training on Colab (round 42: DINOv3 ViT-H+/16 at 192x384, layer decay 0.93; fold 0 only)\n\n"
+        "**This notebook (user brief of 2026-11-20, after v37 = 0.86815):** v36's ViT-H+ member (`dinov3Hp_144`, 144x272 = 9 x 17 patches) "
+        "at a higher input resolution, **192x384 = 12 x 24 patches (293 tokens)**: ViT-H+ uses RoPE only (no position table), so the "
+        "larger grid needs no interpolation (laptop check: the fixed 192x384 model equals timm's dynamic-size path, max |diff| 0). "
+        "Recipe fixed before the run (user's): lr 8e-5, **layer decay 0.93** (block 0 at 0.098 of the head's lr; 0.90 gave 0.034), "
+        "2 warm-up + 16 cosine epochs, HUD dropout 0.70, batch 64, gradient checkpointing on (about 22 GiB estimated; a VRAM smoke "
+        "test - one full training step with AdamW and the EMA copy - runs before the benchmark). Tag `dinov3Hp_384`. **Fold 0 only** "
+        "(`FOLDS = [0]`, `DO_FULL = False`). Gate, fixed before the run: alone >= **0.9960** macro-F1 on fold 0 (`MIN_ALONE` = what "
+        "`dinov3Hp_144` reached on fold 0: a higher resolution that is not better alone is an expensive replicate) **and** the v24 check "
+        "against the v23 members; then, on the laptop, the fold-0 comparison with v37 (`experiments/claude/ht_r42_t4_dinov3h384_fold0.py`, "
+        "variants fixed before the run). If it passes and the user goes on: `FOLDS = [0, 1, 2, 3, 4]` (and `DO_FULL = True` if the "
+        "compute units allow), *Run all* (fold 0 reused from Drive). The sections below describe earlier runs.")
+    src = nb.cells[1].source
+    for old, new in (('TAG = "dinov3Hp_144"', 'TAG = "dinov3Hp_384"'),
+                     ('LD, EPOCHS = "0.90", "18"', 'LD, EPOCHS = "0.93", "18"'),
+                     ('MIN_ALONE = 0.9925', 'MIN_ALONE = 0.9960'),
+                     ('H, W = 144, 272               # 9 x 17 patches of 16 px, the token grid of DINOv2-L at 126 x 238',
+                      'H, W = 192, 384               # 12 x 24 patches of 16 px (dinov3Hp_144: 144 x 272 = 9 x 17)')):
+        assert src.count(old) == 1, old
+        src = src.replace(old, new)
+    nb.cells[1].source = src
+    k = next(i for i, c in enumerate(nb.cells) if c.cell_type == "code" and "DINOv3 compatibility check" in c.source)
+    assert nb.cells[k].source.count("(9 x 17 = 153 patches + class + registers)") == 1
+    nb.cells[k].source = nb.cells[k].source.replace("(9 x 17 = 153 patches + class + registers)", "(12 x 24 = 288 patches + class + registers)")
+    smoke = nbf.v4.new_code_cell(r"""
+# ---- VRAM smoke test: one full training step (forward + backward + AdamW step + EMA copy) at H x W, batch 64 ----------------------
+# Peak memory here ~ the training run's; stop if it is too close to the GPU's memory (then ACCUM = 2).
+import copy
+import sys
+import timm
+import torch
+from timm.optim import param_groups_layer_decay
+sys.path.insert(0, str(R))
+from src import task4
+torch.cuda.empty_cache()
+torch.cuda.reset_peak_memory_stats()
+m = task4.create_model(MODEL, img_size=(H, W)).cuda().to(memory_format=torch.channels_last).train()
+ema = copy.deepcopy(m).eval()
+if GRAD_CKPT:
+    m.set_grad_checkpointing(True)
+groups = param_groups_layer_decay(m, weight_decay=0.05, layer_decay=float(LD))
+for g in groups:
+    g["lr"] = float(LR) * g.pop("lr_scale", 1.0)
+opt = torch.optim.AdamW(groups, lr=float(LR), weight_decay=0.05)
+x = torch.rand(64, 3, H, W, device="cuda")
+with torch.autocast("cuda", dtype=torch.bfloat16):
+    out = m(task4.normalize(x).to(memory_format=torch.channels_last))
+out.float().logsumexp(1).mean().backward()
+torch.nn.utils.clip_grad_norm_(m.parameters(), 2.0)
+opt.step()
+peak, total = torch.cuda.max_memory_allocated() / 2**30, torch.cuda.get_device_properties(0).total_memory / 2**30
+print(f"{MODEL}: {len(m.blocks)} blocks, {sum(p.numel() for p in m.parameters()) / 1e6:.0f} M parameters, patch grid {tuple(m.patch_embed.grid_size)}; "
+      f"peak GPU memory of one training step (batch 64, AdamW, EMA copy) {peak:.1f} of {total:.0f} GiB")
+assert peak < 0.92 * total, "too close to the GPU memory: set ACCUM = 2"
+del m, ema, opt, out, x
 torch.cuda.empty_cache()
 """.strip("\n"))
     k = next(i for i, c in enumerate(nb.cells) if c.cell_type == "code" and c.source.lstrip().startswith("# ---- 1-epoch benchmark"))

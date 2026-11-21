@@ -123,6 +123,9 @@ T4_BACKBONES = {   # tag -> (timm model, input HxW) as trained by scripts/train_
     # round 42 (v36): DINOv3 ViT-H+/16 (841 M, 32 blocks) at 144x272, the dinov3L_lr8e5 recipe unchanged, on a Colab A100
     # (--lr 8e-5 --layer-decay 0.90 --warmup-epochs 2 --epochs 18 --p-hud 0.70 --grad-ckpt; colab/t4_colab_dinov3h.ipynb)
     "dinov3Hp_144": ("vit_huge_plus_patch16_dinov3.lvd1689m", (144, 272)),
+    # round 42 (v38): the same ViT-H+/16 at 192x384 (12x24 patches), layer decay 0.93, on a Colab A100; no full refit (test input =
+    # the 5-fold average) (--lr 8e-5 --layer-decay 0.93 --warmup-epochs 2 --epochs 18 --p-hud 0.70 --grad-ckpt; colab/t4_colab_dinov3h384.ipynb)
+    "dinov3Hp_384": ("vit_huge_plus_patch16_dinov3.lvd1689m", (192, 384)),
 }
 fold_done = lambda tag: all((C.PRED_DIR / f"t4_{tag}_fold{f}.npz").exists() for f in range(N_FOLDS))
 if not fold_done("cnxt") and RUN_T4_TRAINING:
@@ -731,9 +734,16 @@ pf["OOF (all folds)"] = [macro_f1(y4, oof_tag[t].argmax(1)) for t in pf.index]
 # DINOv3-L-384 x20, C-RADIOv3-L x10 (x2 on gated frames), ConvNeXt-T / DeiT-III 0.25, HUD members 0.75, probe 0.30. Against v36 nested:
 # full +0.0003, 70% zoom +0.0007, HUD hidden +0.0008, real dark frames +0.0001 (by fold mixed), zoom / HUD better in 5/5 folds; the
 # setting sits on the grid edge in five of six factors (the grid was not extended afterwards).
+# Round 42 (v38): DINOv3 ViT-H+/16 at 192x384 (layer decay 0.93) added at x40 on every frame, the 144x272 member staying at x40.
+# Variants fixed before the fold-0 run (ht_r42: in place of the 144x272 member at x40, both x20, added x20, added x40), all four passed
+# on fold 0; judged on all five folds against v37 by a script written before folds 1-4 were trained
+# (experiments/claude/hu_r42_t4_dinov3h384_eval.py): nested picks added x40 in four folds (in place in the fifth); against v37 full
+# +0.0006, 70% zoom +0.0008, HUD hidden +0.0019, real dark frames +0.0006, zoom / HUD better in 5/5 folds. Added x40 in-sample: full
+# +0.0007, zoom +0.0007, HUD hidden +0.0021, dark +0.0012, dark frames never worse in any fold. Alone (TTA) 0.9953-0.9963 per fold,
+# the best member on every fold.
 T4_MEMBER_W = {"dinov2_v2": 8.0, "cnxt": 0.25, "deit3": 0.25, "cnxt_hud": 0.75, "cnxt22k_hud": 0.75, "effv2_hud": 0.75, "deit3_hud": 0.75,
                "cnxtS_hud": 0.75, "dinov2L_hud70": 8.0, "dinov3L_lr8e5": 10.0, "dinov3L_384": 20.0, "cradio3L_384": 10.0,
-               "dinov3Hp_144": 40.0}
+               "dinov3Hp_144": 40.0, "dinov3Hp_384": 40.0}
 # Round 42 (v34): C-RADIOv3-L x20 on normal frames and x2 on gated (dark / low-contrast) frames, the DINOv2-L treatment. Fold 0 was
 # seen first (ungated R / H / A lost on the dark frames, hj_r42; the gated variants were proposed after that, hk_r42), so the decision
 # was made on folds 1-4 only by a script written before they were looked at (experiments/claude/hm_r42_t4_radio_eval.py): nested
@@ -844,7 +854,7 @@ for i, v in enumerate(pc4[::-1]):
     axes[1].text(v, i, f" {v:.4f}", va="center", fontsize=8.5)
 axes[1].set_xlim(0.9, 1.0); axes[1].set_title("Per-class F1 (OOF)")
 plt.tight_layout(); savefig(fig, "t4_confusion"); plt.show()
-summary.append(["Task 4", "macro-F1", SCORE4, f"{' + '.join(T4_TAGS)} 5-fold, GPU aug + Mixup/CutMix, EMA, h-flip TTA{', brightness / contrast gate for DINOv2-L (x8 / x2)' if 'dinov2L_hud70' in T4_TAGS else ''}{' and C-RADIOv3-L (x20 / x2)' if 'cradio3L_384' in T4_TAGS else ''}{', DINOv3-L at 144x272 and 192x384 (x20 each) on every frame' if 'dinov3L_384' in T4_TAGS else ', DINOv3-L x20 on every frame' if 'dinov3L_lr8e5' in T4_TAGS else ''}{', DINOv3 ViT-H+ x20 on every frame' if 'dinov3Hp_144' in T4_TAGS else ''}{f' + {PROBE_W4:.0%} frozen-feature probe' if HAS_PROBE4 else ''}, balanced-prior rule (alpha 0.75)"])
+summary.append(["Task 4", "macro-F1", SCORE4, f"{' + '.join(T4_TAGS)} 5-fold, GPU aug + Mixup/CutMix, EMA, h-flip TTA{', brightness / contrast gate for DINOv2-L (x8 / x2)' if 'dinov2L_hud70' in T4_TAGS else ''}{' and C-RADIOv3-L (x20 / x2)' if 'cradio3L_384' in T4_TAGS else ''}{', DINOv3-L at 144x272 and 192x384 (x20 each) on every frame' if 'dinov3L_384' in T4_TAGS else ', DINOv3-L x20 on every frame' if 'dinov3L_lr8e5' in T4_TAGS else ''}{', DINOv3 ViT-H+ at 144x272 and 192x384 (x40 each) on every frame' if 'dinov3Hp_384' in T4_TAGS else ', DINOv3 ViT-H+ x40 on every frame' if 'dinov3Hp_144' in T4_TAGS else ''}{f' + {PROBE_W4:.0%} frozen-feature probe' if HAS_PROBE4 else ''}, balanced-prior rule (alpha 0.75)"])
 """)
 code(r"""
 # Diversity of the members on held-out TRAINING images: pairwise agreement of their OOF labels (test images are not used)
