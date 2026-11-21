@@ -3601,3 +3601,10 @@ x10, A added x20; written before the run; `--probe p8 --pw w` if part A changes 
   factors), but the nested estimate does not carry the dark-frame gain; one factor at a time, H384 60 alone +0.0002 / +0.0002 / +0.0004 /
   -0.0002 fails. Unlike v32 / v37 (where N passed), the extra weight on the strongest member is not supported out of fold; no grid
   extension (one run).
+* **Round 42, nested check of the balanced-prior exponent on the v38 ensemble (`hw_r42_t4_alpha_v38.py`, user's grid fixed before the
+  run: alpha {0.65, 0.70, 0.75, 0.80, 0.85}; log `outputs/r42/hw_alpha_v38.log`; 8 s): N FAILS -> alpha 0.75 stays (applies to v39 too:
+  the full refit changes only the test input).** Reference reproduces v38. Nested picks 0.65 in fold 0 only (no alpha meets the rule on
+  the other folds' training sets in folds 1-4) -> N full +0.0000, zoom70 +0.0000, HUD hidden -0.0002, dark +0.0000, 0 full-frame
+  labels -> fail. In-sample every alternative fails (|deltas| <= 0.0003; 2-7 OOF full-frame labels change): the ensemble is flat in alpha
+  around 0.75 - its OOF probabilities are rarely near a class boundary. Information: on test, 0.70 / 0.80 change 19 / 18 Task 4 labels,
+  0.65 / 0.85 change 43 / 39 (of 25,889).
