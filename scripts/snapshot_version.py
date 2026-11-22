@@ -32,7 +32,7 @@ def main():
     if dest.exists():
         raise SystemExit(f"{dest.relative_to(ROOT)} already exists")
     (dest / "outputs").mkdir(parents=True)
-    ignore = shutil.ignore_patterns("__pycache__", ".ipynb_checkpoints")
+    ignore = shutil.ignore_patterns("__pycache__", ".ipynb_checkpoints", "t4_feat*", "t4_mres*", "dinov3_7b_*")
     for f in FILES:
         if (ROOT / f).exists():
             shutil.copy2(ROOT / f, dest / f)
