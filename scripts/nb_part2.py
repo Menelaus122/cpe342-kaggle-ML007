@@ -108,23 +108,23 @@ T4_BACKBONES = {   # tag -> (timm model, input HxW) as trained by scripts/train_
     "dinov2_v2": ("vit_base_patch14_reg4_dinov2.lvd142m", (126, 238)),
     # (round 28 also trained EVA02 ViT-B/14 with this recipe: in v21, 0.85939 vs v20's 0.85948; removed again, see Limitations)
     # round 39 (v30): DINOv2 ViT-L/14 at the native aspect ratio, trained on a Colab A100 with the same trainer and folds
-    # (--lr 3e-5 --layer-decay 0.85 --warmup-epochs 2 --epochs 15 --p-hud 0.70 --grad-ckpt; colab/t4_colab_train.ipynb)
+    # (--lr 3e-5 --layer-decay 0.85 --warmup-epochs 2 --epochs 15 --p-hud 0.70 --grad-ckpt; task4/colab/t4_colab_train.ipynb)
     "dinov2L_hud70": ("vit_large_patch14_reg4_dinov2.lvd142m", (126, 238)),
     # round 40 (v31): DINOv3 ViT-L/16 (LVD-1689M) at 144x272 (9x17 patches), same trainer and folds on a Colab A100
-    # (--lr 8e-5 --layer-decay 0.90 --warmup-epochs 2 --epochs 18 --p-hud 0.70 --grad-ckpt; colab/t4_colab_dinov3b.ipynb)
+    # (--lr 8e-5 --layer-decay 0.90 --warmup-epochs 2 --epochs 18 --p-hud 0.70 --grad-ckpt; task4/colab/t4_colab_dinov3b.ipynb)
     "dinov3L_lr8e5": ("vit_large_patch16_dinov3.lvd1689m", (144, 272)),
     # round 41 step 2 (v33): the same DINOv3 ViT-L/16 recipe at 192x384 (12x24 patches), same trainer and folds on a Colab A100
-    # (--lr 8e-5 --layer-decay 0.90 --warmup-epochs 2 --epochs 18 --p-hud 0.70 --grad-ckpt; colab/t4_colab_dinov3c.ipynb)
+    # (--lr 8e-5 --layer-decay 0.90 --warmup-epochs 2 --epochs 18 --p-hud 0.70 --grad-ckpt; task4/colab/t4_colab_dinov3c.ipynb)
     "dinov3L_384": ("vit_large_patch16_dinov3.lvd1689m", (192, 384)),
     # round 42 (v34): NVIDIA C-RADIOv3-L (Hugging Face nvidia/C-RADIOv3-L @ 9d041346, src/task4.RadioClassifier: [0, 1] input with its
     # own CLIP normalisation, Linear head on the 3072-d summary) at 192x384, the same recipe and folds on a Colab A100
-    # (--lr 8e-5 --layer-decay 0.90 --warmup-epochs 2 --epochs 18 --p-hud 0.70 --grad-ckpt; colab/t4_colab_radio3.ipynb)
+    # (--lr 8e-5 --layer-decay 0.90 --warmup-epochs 2 --epochs 18 --p-hud 0.70 --grad-ckpt; task4/colab/t4_colab_radio3.ipynb)
     "cradio3L_384": ("c-radio_v3-l", (192, 384)),
     # round 42 (v36): DINOv3 ViT-H+/16 (841 M, 32 blocks) at 144x272, the dinov3L_lr8e5 recipe unchanged, on a Colab A100
-    # (--lr 8e-5 --layer-decay 0.90 --warmup-epochs 2 --epochs 18 --p-hud 0.70 --grad-ckpt; colab/t4_colab_dinov3h.ipynb)
+    # (--lr 8e-5 --layer-decay 0.90 --warmup-epochs 2 --epochs 18 --p-hud 0.70 --grad-ckpt; task4/colab/t4_colab_dinov3h.ipynb)
     "dinov3Hp_144": ("vit_huge_plus_patch16_dinov3.lvd1689m", (144, 272)),
     # round 42 (v38): the same ViT-H+/16 at 192x384 (12x24 patches), layer decay 0.93, on a Colab A100; no full refit (test input =
-    # the 5-fold average) (--lr 8e-5 --layer-decay 0.93 --warmup-epochs 2 --epochs 18 --p-hud 0.70 --grad-ckpt; colab/t4_colab_dinov3h384.ipynb)
+    # the 5-fold average) (--lr 8e-5 --layer-decay 0.93 --warmup-epochs 2 --epochs 18 --p-hud 0.70 --grad-ckpt; task4/colab/t4_colab_dinov3h384.ipynb)
     "dinov3Hp_384": ("vit_huge_plus_patch16_dinov3.lvd1689m", (192, 384)),
 }
 fold_done = lambda tag: all((C.PRED_DIR / f"t4_{tag}_fold{f}.npz").exists() for f in range(N_FOLDS))
@@ -666,7 +666,7 @@ For each backbone, every fold model (final EMA weights) predicts its held-out fo
 * **HUD-dropout versions** (round 19) of ConvNeXt-Tiny, ConvNeXt-Tiny IN-22k, EfficientNetV2-S IN-21k and DeiT-III-S, and (round 21) of the larger ConvNeXt-Small IN-12k.
 * **DINOv2 ViT-B/14** (self-supervised, LVD-142M; round 28) fine-tuned at 126×238, the images' own aspect ratio (9×17 patches), with lr 5e-5, layer-wise lr decay 0.8, 2 warm-up + 13 cosine epochs and HUD dropout. Alone it is the most robust model on zoomed, darkened and partly hidden frames (fold 0: 70% zoom 0.974 against 0.971 for the other seven together), and it counted three times in the average from v20 (weight chosen nested on full / zoom / HUD-hidden views: +0.0006 over equal weights, 5/5 folds). **Round 30:** with the gamma 3.5 and 75%-grid views added to the criterion, the nested choice moves further away from the two plain members: DINOv2 ×8, each HUD-dropout member ×3, the plain ConvNeXt-T and DeiT-III ×1 (+0.0014 on the mean of the four hard views, better in 5/5 folds, full frames −0.0001). An earlier run of the same backbone with lr 1.5e-5 and decay 0.65 for 10 epochs reached only 0.940: the recipe, not the backbone, was the problem.
 * **DINOv2 ViT-L/14** (round 39, v30; trained on a Colab A100 with the same trainer and folds) at 126×238, lr 3e-5, layer decay 0.85, HUD dropout 0.70. Alone it is the strongest model (OOF: 70% zoom 0.978 vs 0.973 for the DINOv2-B member, HUD hidden 0.962 vs 0.954). It counts **eight times on normal frames and twice on dark / low-contrast ones**: a gate measured on each image (mean grey level or grey-level SD at or below the 10% quantile of the training images). At weight 8 everywhere it lifts zoomed and HUD-hidden frames but loses on the real dark frames; the gated pair, chosen nested from 12 settings fixed before the run (`experiments/claude/gu_r39_t4_gated.py`), gains against v29 full +0.0003, 70% zoom +0.0011, HUD hidden +0.0017, dark frames +0.0006, zoom / HUD better in 5/5 folds.
-* A **probe on frozen foundation features** is mixed in at **20%** (**v41**; 30% in v37–v40, 35% in v29–v36, 20% in v28, 10% with a logistic probe in v19–v27). Earlier rounds (v28–v40) used a 1-hidden-layer MLP on pooled features of seven backbones (7,040-d: CLIP-B, DINOv2-B, SigLIP 2-B, DINOv2-L, SigLIP 2-SO400M, EVA-02-L, ConvNeXt-L CLIP; `scripts/train_task4_probe.py`), fitted on `full`, `zoom70`, and `centre_grey`. In **round 43 (`v41`)**, this was replaced with **`P_7b`** (`scripts/train_task4_probe_7b.py`), a Gen-2 MLP (`LayerNorm + GELU`, Feature-Space Mixup `Beta(0.4, 0.4)`, label smoothing 0.1, per-subblock + backbone L2-norm, trained on four views `full / zoom70 / centre_grey / dark_lc`) over frozen multi-layer `16,384-d` features (`mid_patch, last_patch, last_cls, last_std`) of **`DINOv3-7B @ 144×272`** (`vit_7b_patch16_dinov3.lvd1689m`). Alone, `P_7b` reaches `0.9882` balanced macro-F1 on full frames (`0.9653` on dark frames; vs `0.9724 / 0.9342` for the 7-backbone `P7` probe); mixed into the ensemble at `0.20`, it gives `full +0.0003, 70% zoom +0.0007, HUD hidden +0.0005, real dark frames +0.0011` (`5/5` folds zoom/HUD positive; `P_7b`-only nested `+0.0003 / +0.0007 / +0.0004 / +0.0005`). Because the fine-tuned ensemble contains no 7B backbone, `DINOv3-7B` adds complementary dark/hard-view signal and cuts `dinov3Hp_384` dark vote-outs from `10` to `3`.
+* A **probe on frozen foundation features** is mixed in at **20%** (**v41**; 30% in v37–v40, 35% in v29–v36, 20% in v28, 10% with a logistic probe in v19–v27). Earlier rounds (v28–v40) used a 1-hidden-layer MLP on pooled features of seven backbones (7,040-d: CLIP-B, DINOv2-B, SigLIP 2-B, DINOv2-L, SigLIP 2-SO400M, EVA-02-L, ConvNeXt-L CLIP; `experiments/scripts/train_task4_probe.py`), fitted on `full`, `zoom70`, and `centre_grey`. In **round 43 (`v41`)**, this was replaced with **`P_7b`** (`scripts/train_task4_probe_7b.py`), a Gen-2 MLP (`LayerNorm + GELU`, Feature-Space Mixup `Beta(0.4, 0.4)`, label smoothing 0.1, per-subblock + backbone L2-norm, trained on four views `full / zoom70 / centre_grey / dark_lc`) over frozen multi-layer `16,384-d` features (`mid_patch, last_patch, last_cls, last_std`) of **`DINOv3-7B @ 144×272`** (`vit_7b_patch16_dinov3.lvd1689m`). Alone, `P_7b` reaches `0.9882` balanced macro-F1 on full frames (`0.9653` on dark frames; vs `0.9724 / 0.9342` for the 7-backbone `P7` probe); mixed into the ensemble at `0.20`, it gives `full +0.0003, 70% zoom +0.0007, HUD hidden +0.0005, real dark frames +0.0011` (`5/5` folds zoom/HUD positive; `P_7b`-only nested `+0.0003 / +0.0007 / +0.0004 / +0.0005`). Because the fine-tuned ensemble contains no 7B backbone, `DINOv3-7B` adds complementary dark/hard-view signal and cuts `dinov3Hp_384` dark vote-outs from `10` to `3`.
 
 **Why HUD dropout.** Occluding parts of validation images shows that the first two models read mostly the on-screen HUD, above all the bottom control strip: with only the centre of the frame visible, fold-0 accuracy falls from 0.988 to 0.934 (PUBE Mobile 0.890). This shortcut is measured on training images: a model that needs the HUD fails on any frame without one (menus, crowds, zoomed or cropped captures). HUD dropout hides, with probability 0.5 per training image, the bottom strip, the top strip and corners, or all borders, or zooms into the central 60–75% (`task4.GPUAugment._hud`). On the same fold-0 validation images it keeps full-frame accuracy (0.9878 → 0.9872, difference inside noise) and raises centre-only accuracy to 0.961 (+0.027, 95% CI [+0.022, +0.033]; PUBE 0.944) and accuracy on a natural 70% centre zoom from 0.961 to 0.968 (+0.008, CI [+0.004, +0.012]). Averaging a normal and a HUD-dropout model is best or near-best on every view (`experiments/claude/cm_r19_t4_hud_eval.py`). (Provenance: the idea was also prompted by low-confidence test frames that looked HUD-less, round 19; the decision rests on the training-image results above.)
 
@@ -688,7 +688,7 @@ t4_names = np.array(t4_test.file_name.tolist(), dtype="U")
 
 
 def check_t4_order(z, name):
-    # every cache must list the test images in test.csv order (row i = ANS{i}); scripts/reorder_task4_test_cache.py
+    # every cache must list the test images in test.csv order (row i = ANS{i}); experiments/scripts/reorder_task4_test_cache.py
     # moved the caches made under the first release (other row order) into the 2026-11-12 order
     assert "test_file_name" in z.files and (z["test_file_name"] == t4_names).all(), f"{name}: test rows not in test.csv order"
 
@@ -792,7 +792,7 @@ if len(T4_TAGS) > 1:
     pf.loc["probability average (equal weights)"] = [np.nan] * N_FOLDS + [macro_f1(y4, np.mean([oof_tag[t] for t in T4_TAGS], axis=0).argmax(1))]
     pf.loc["probability average (member weights)"] = [np.nan] * N_FOLDS + [macro_f1(y4, oof4.argmax(1))]
 # Frozen-feature probe (round 43 v41: P_7b via scripts/train_task4_probe_7b.py on frozen DINOv3-7B @ 144x272 multi-layer features;
-# trained on full / zoom70 / centre_grey / dark_lc with Feature-Space Mixup). Earlier v28-v40 used scripts/train_task4_probe.py (P7).
+# trained on full / zoom70 / centre_grey / dark_lc with Feature-Space Mixup). Earlier v28-v40 used experiments/scripts/train_task4_probe.py (P7).
 PROBE_TAG4 = "probe7b"           # round 43 (v41): P_7b @ 0.20 replacing 7-backbone P7 ("probe") @ 0.30
 PROBE_W4 = 0.20                  # round 43 (v41): 0.30 -> 0.20 with DINOv3-7B P_7b (v37-v40: 0.30; v29-v36: 0.35)
 HAS_PROBE4 = all((C.PRED_DIR / f"t4_{PROBE_TAG4}_fold{f}.npz").exists() for f in range(N_FOLDS))
@@ -1189,27 +1189,31 @@ md(r"""
 """)
 md("## 8.4 Task 4: where does the CNN look? (Grad-CAM)")
 code(r"""
-cam_model = task4.create_model("convnext_tiny.in12k_ft_in1k", pretrained=False).to(DEVICE)
-cam_model.load_state_dict(torch.load(C.MODEL_DIR / "t4_cnxt_fold0.pt", map_location=DEVICE))
-gc = task4.GradCAM(cam_model, cam_model.stages[-1])
-z0 = np.load(C.PRED_DIR / "t4_cnxt_fold0.npz")
-va_idx0, vp0 = z0["val_idx"], z0["val_probs"]
-pick = []
-for k in range(5):
-    ok = va_idx0[(y4[va_idx0] == k) & (vp0.argmax(1) == k)]
-    pick += list(np.random.default_rng(k).choice(ok, 2, replace=False))
-arr = task4.load_uint8([t4_train.path.iloc[i] for i in pick])
-x = task4.normalize(task4.to_gpu_batch(arr, (160, 320), DEVICE))
-cams, probs = gc(x)
-fig, axes = plt.subplots(2, 5, figsize=(14, 3.6))
-for i, ax in enumerate(axes.T.ravel()):
-    img = task4.to_gpu_batch(arr[i:i + 1], (160, 320), DEVICE)[0].permute(1, 2, 0).cpu().numpy()
-    ax.imshow(img); ax.imshow(cams[i], cmap="magma", alpha=0.45); ax.axis("off")
-    k = y4[pick[i]]
-    ax.set_title(f"{C.T4_CLASS_NAMES[k]}  p={probs[i, k]:.2f}", fontsize=8.5)
-fig.suptitle("Grad-CAM on the last ConvNeXt stage (fold-0 model, held-out images)", y=1.02, fontsize=11)
-plt.tight_layout(); savefig(fig, "t4_gradcam"); plt.show()
-del cam_model; torch.cuda.empty_cache()
+CAM_CKPT = C.MODEL_DIR / "t4_cnxt_fold0.pt"   # not in git: GitHub release t4-checkpoints (see task4/README.md)
+if not CAM_CKPT.exists():
+    print(f"Grad-CAM skipped: {CAM_CKPT} not found (figure only; predictions do not depend on it)")
+else:
+    cam_model = task4.create_model("convnext_tiny.in12k_ft_in1k", pretrained=False).to(DEVICE)
+    cam_model.load_state_dict(torch.load(CAM_CKPT, map_location=DEVICE))
+    gc = task4.GradCAM(cam_model, cam_model.stages[-1])
+    z0 = np.load(C.PRED_DIR / "t4_cnxt_fold0.npz")
+    va_idx0, vp0 = z0["val_idx"], z0["val_probs"]
+    pick = []
+    for k in range(5):
+        ok = va_idx0[(y4[va_idx0] == k) & (vp0.argmax(1) == k)]
+        pick += list(np.random.default_rng(k).choice(ok, 2, replace=False))
+    arr = task4.load_uint8([t4_train.path.iloc[i] for i in pick])
+    x = task4.normalize(task4.to_gpu_batch(arr, (160, 320), DEVICE))
+    cams, probs = gc(x)
+    fig, axes = plt.subplots(2, 5, figsize=(14, 3.6))
+    for i, ax in enumerate(axes.T.ravel()):
+        img = task4.to_gpu_batch(arr[i:i + 1], (160, 320), DEVICE)[0].permute(1, 2, 0).cpu().numpy()
+        ax.imshow(img); ax.imshow(cams[i], cmap="magma", alpha=0.45); ax.axis("off")
+        k = y4[pick[i]]
+        ax.set_title(f"{C.T4_CLASS_NAMES[k]}  p={probs[i, k]:.2f}", fontsize=8.5)
+    fig.suptitle("Grad-CAM on the last ConvNeXt stage (fold-0 model, held-out images)", y=1.02, fontsize=11)
+    plt.tight_layout(); savefig(fig, "t4_gradcam"); plt.show()
+    del cam_model; torch.cuda.empty_cache()
 """)
 md(r"""
 **Business reading (game detection).** The attention maps land on **game-specific HUD and art assets**: menus, minimaps, character art and vehicle or world textures, rather than on the noise or the black rotation borders. This shows the corruption-matched augmentation taught the network to ignore artefacts. On in-distribution screenshots (OOF macro-F1 ≈ 0.99) the classifier can auto-route the 2,000 daily support tickets to the right game team. It can also verify "Play Multiple Games" campaign screenshots at scale. The §7.4 shift analysis argues for a **confidence gate** in production: predictions with max probability < 0.7 go to a human. That is under 2% of in-distribution traffic, but about a fifth of the shifted test-style traffic, and those hard cases are the ones that should be collected and labelled to retrain the model.

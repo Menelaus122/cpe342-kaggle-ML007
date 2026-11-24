@@ -1,7 +1,7 @@
 """Build one self-contained notebook per task (task1/task1.ipynb ... task5/task5.ipynb).
 
 The cells come from the same definitions as the master notebook (scripts/nb_part1.py, nb_part2.py), so the
-per-task notebooks and CPE342_Master_Pipeline.ipynb always run identical code and produce identical predictions.
+per-task notebooks and the archived all-in-one notebook (experiments/master_pipeline/) always run identical code and produce identical predictions.
 Cells that cover several tasks in the master notebook (loading, folds, tuning, Train+Val refit, submission)
 are rebuilt here for one task. Each notebook follows the same 10-section layout and ends by writing its own
 column to outputs/submission_parts/task{k}.csv; scripts/make_submission.py joins the five parts.
@@ -221,8 +221,8 @@ def task_cells(k):
     # title
     toc = "\n".join(f"{i}. [{name}](#{i})" for i, name in enumerate(TOC, 1))
     md(f"# Task {k}: {t['name']}\nCPE342 Karena Thailand Player Intelligence. {t['kind']}, target `{t['target']}`, metric {t['metric']}.\n\n"
-       f"This notebook is the Task {k} slice of `CPE342_Master_Pipeline.ipynb`: the same cells, the same shared code in `src/` and the same "
-       f"cached artefacts in `outputs/`, so both produce identical predictions. It ends by writing `outputs/submission_parts/task{k}.csv`; "
+       f"Its cells are generated from `scripts/nb_part1.py` / `nb_part2.py` and use the shared code in `src/` and the "
+       f"cached artefacts in `outputs/`. It ends by writing `outputs/submission_parts/task{k}.csv`; "
        f"`python scripts/make_submission.py` joins the five parts into `submission.csv`.\n\n"
        "**Rules followed.** Only the provided data are used; test rows are only ever predicted"
        + (" (Task 5 ships only an unlabeled `test.csv`, so its unsupervised detectors are fitted on it as the brief intends)" if k == 5 else "")
