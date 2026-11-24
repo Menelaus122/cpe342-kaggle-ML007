@@ -1,6 +1,6 @@
 """Generate self-contained Round 43 Colab notebook for Top-12-block LoRA fine-tuning of DINOv3-7B @ 144x272:
-    python colab/build_r43_lora_nb.py
-    python colab/build_r43_lora_nb.py --smoke-local
+    python experiments/colab/build_r43_lora_nb.py
+    python experiments/colab/build_r43_lora_nb.py --smoke-local
 
 Default run generates `colab/t4_colab_dinov3_7b_lora.ipynb` (Fold-0 Gate first).
 `--smoke-local` also executes the exact notebook core code (`LoRALinear`, `TopKLoRADinoV3`, `TrainableEMA`,
@@ -896,7 +896,7 @@ if AUTO_DISCONNECT:
     nb.cells.append(nbf.v4.new_markdown_cell(title.strip("\n")))
     for src in (c1, c2, c3, c4, c5, c6, c7):
         nb.cells.append(nbf.v4.new_code_cell(src.strip("\n")))
-    out = Path("colab/t4_colab_dinov3_7b_lora.ipynb")
+    out = Path("experiments/colab/t4_colab_dinov3_7b_lora.ipynb")
     nbf.write(nb, out)
     return out
 

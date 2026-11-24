@@ -15,7 +15,7 @@ import hashlib
 import shutil
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 FILES = ["submission.csv", "CPE342_Master_Pipeline.ipynb", "README.md", "requirements.txt"]
 DIRS = ["src", "scripts", "task1", "task2", "task3", "task4", "task5"]
 OUT_DIRS = ["params", "preds", "format_variants", "figures", "submission_parts"]
@@ -28,7 +28,7 @@ def main():
     ap.add_argument("--note", default="", help="one line: what changed")
     args = ap.parse_args()
 
-    dest = ROOT / "versions" / (args.name if args.lb == "not submitted" else f"{args.name}_LB{args.lb}")
+    dest = ROOT / "experiments" / "versions" / (args.name if args.lb == "not submitted" else f"{args.name}_LB{args.lb}")
     if dest.exists():
         raise SystemExit(f"{dest.relative_to(ROOT)} already exists")
     (dest / "outputs").mkdir(parents=True)
