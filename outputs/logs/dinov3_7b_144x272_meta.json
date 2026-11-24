@@ -1,0 +1,29 @@
+{
+  "model": "vit_7b_patch16_dinov3.lvd1689m",
+  "hw": [
+    144,
+    272
+  ],
+  "dim": 16384,
+  "subblock_dims": [
+    4096,
+    4096,
+    4096,
+    4096
+  ],
+  "subblock_names": [
+    "mid_patch",
+    "last_patch",
+    "last_cls",
+    "last_std"
+  ],
+  "train_views": [
+    "full",
+    "zoom70",
+    "centre_grey",
+    "dark_lc"
+  ],
+  "extract_test": true,
+  "n_train": 31546,
+  "n_test": 25889
+}

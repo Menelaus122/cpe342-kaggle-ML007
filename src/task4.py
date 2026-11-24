@@ -84,7 +84,7 @@ class GPUAugment:
     def __init__(self, p_affine=0.6, max_rot=25, scale=(0.85, 1.15), max_shift=0.08, max_shear=8,
                  randaug_chunk=8, p_jitter=0.5, p_invert=0.15, p_gray=0.05, p_noise=0.4,
                  max_noise=0.10, p_blur=0.2, p_erase=0.2, p_hud=0.0, hud_zoom=(0.60, 0.75),
-                 p_grid=0.0, grid_cover=(0.65, 0.85), jitter_gain=1.0):
+                 p_grid=0.0, grid_cover=(0.65, 0.85), jitter_gain=1.0, p_lowlight=0.0, p_chshuffle=0.0):
         self.__dict__.update(locals())
         del self.__dict__["self"]
         self.randaug = v2.RandAugment(num_ops=2, magnitude=9)
@@ -205,11 +205,22 @@ class GPUAugment:
         x = self._affine(x)
         x = self._randaugment(x)
         x = self._jitter(x)
+        if self.p_chshuffle > 0:                                        # round 40: random RGB channel order (never the identity)
+            perms = torch.tensor([[0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]], device=dev)
+            pick = perms[torch.randint(0, 5, (B,), device=dev)]
+            shuffled = torch.gather(x, 1, pick[:, :, None, None].expand_as(x))
+            x = torch.where(self._bern(self.p_chshuffle, B, dev)[:, None, None, None], shuffled, x)
         inv = self._bern(self.p_invert, B, dev)[:, None, None, None]
         x = torch.where(inv, 1 - x, x)
         g = self._bern(self.p_gray, B, dev)[:, None, None, None]
         gray = (0.299 * x[:, 0] + 0.587 * x[:, 1] + 0.114 * x[:, 2]).unsqueeze(1).expand_as(x)
         x = torch.where(g, gray, x)
+        if self.p_lowlight > 0:                                         # round 40: near-black frame with heavy sensor noise
+            on = self._bern(self.p_lowlight, B, dev)[:, None, None, None]
+            u = lambda lo, hi: (lo + torch.rand(B, device=dev) * (hi - lo))[:, None, None, None]
+            dim = torch.where(self._bern(0.5, B, dev)[:, None, None, None], x * u(0.05, 0.30), x.clamp_min(1e-6) ** u(2.0, 4.0))
+            dim = (dim + torch.randn_like(x) * u(0.05, 0.15)).clamp(0, 1)
+            x = torch.where(on, dim, x)
         nz = self._bern(self.p_noise, B, dev)[:, None, None, None]
         sig = (torch.rand(B, device=dev) * self.max_noise)[:, None, None, None]
         x = torch.where(nz, (x + torch.randn_like(x) * sig).clamp(0, 1), x)
@@ -245,7 +256,71 @@ NATIVE_NORM = {"vit_base_patch16_siglip_224.v2_webli", "vit_base_patch16_siglip_
                "eva02_base_patch14_448.mim_in22k_ft_in22k_in1k"}       # round 28 (CLIP mean / std in its pre-trained config)
 
 
+# Round 42: NVIDIA C-RADIO (Hugging Face, trust_remote_code; not in timm 1.0.30). Pipeline name -> (repo, revision pinned to the code
+# that was read before it was first run). Needs transformers, einops and open_clip_torch (the transformers loader checks that the
+# repo's optional open_clip adaptor can import; it is never used here).
+RADIO_MODELS = {"c-radio_v3-l": ("nvidia/C-RADIOv3-L", "9d0413465e8a91e67bbf2c1ad342815478d1b906")}
+
+
+class RadioClassifier(nn.Module):
+    """C-RADIO backbone + Linear(summary -> classes).
+
+    Input: the pipeline feeds ImageNet-normalised tensors everywhere (GPUAugment, predict_array); RADIO was trained on [0, 1] RGB
+    and normalises inside (its InputConditioner, OpenAI CLIP mean / std). forward() therefore maps the input back to [0, 1] exactly
+    before the backbone, so the backbone sees [0, 1] images and its own normalisation only (no double normalisation).
+    Head: Linear on RADIO's `summary` (the class tokens of the CLIP, SigLIP 2 and DINOv2 teachers, 3 x 1024 = 3072 for the L model),
+    the embedding of the frozen probe in experiments/claude/ia_r42_t4_radio_frozen.py.
+    Training hooks used by train_fold: stochastic depth 0 -> drop_path over the 24 blocks (as timm's drop_path_rate);
+    set_grad_checkpointing -> the inner timm ViT (RADIO's CPE forward runs timm.checkpoint_seq over its blocks); group_matcher ->
+    layer-wise lr decay with the CPE patch generator as the stem (timm's own ViT matcher does not know it), blocks 0-23, final norm
+    and head on top."""
+
+    def __init__(self, name, num_classes=5, pretrained=True, drop_path=0.1):
+        super().__init__()
+        from timm.layers import DropPath, trunc_normal_
+        from transformers import AutoConfig, AutoModel
+        repo, rev = RADIO_MODELS[name]
+        if pretrained:
+            self.radio = AutoModel.from_pretrained(repo, trust_remote_code=True, revision=rev)
+        else:
+            cfg = AutoConfig.from_pretrained(repo, trust_remote_code=True, revision=rev)
+            self.radio = AutoModel.from_config(cfg, trust_remote_code=True)
+        vit = self.radio.radio_model.model
+        if getattr(vit, "reg_token", None) is not None:   # timm's leftover; the CPE patch generator carries the class + register tokens
+            vit.reg_token.requires_grad_(False)           # (never used in the forward pass: no gradient, kept out of the optimiser)
+        for blk, p in zip(vit.blocks, torch.linspace(0, drop_path, len(vit.blocks)).tolist()):
+            blk.drop_path1 = DropPath(p) if p > 0 else nn.Identity()
+            blk.drop_path2 = DropPath(p) if p > 0 else nn.Identity()
+        n_sum = self.radio.radio_model.summary_idxs.numel()
+        self.num_features = vit.embed_dim * n_sum
+        self.head = nn.Linear(self.num_features, num_classes)
+        trunc_normal_(self.head.weight, std=0.02)
+        nn.init.zeros_(self.head.bias)
+        self.register_buffer("in_mean", torch.tensor(MEAN).view(1, 3, 1, 1), persistent=False)
+        self.register_buffer("in_std", torch.tensor(STD).view(1, 3, 1, 1), persistent=False)
+
+    def forward_summary(self, x):
+        summary, _ = self.radio.radio_model(x * self.in_std + self.in_mean)     # ImageNet-normalised -> [0, 1]
+        return summary
+
+    def forward(self, x):
+        return self.head(self.forward_summary(x))
+
+    def get_classifier(self):
+        return self.head
+
+    def set_grad_checkpointing(self, enable=True):
+        self.radio.radio_model.model.set_grad_checkpointing(enable)
+
+    def group_matcher(self, coarse=False):
+        p = r"^radio\.radio_model\.model\."
+        return dict(stem=p + r"(?:patch_generator|cls_token|reg_token|pos_embed|patch_embed)",   # non-capturing: timm reads groups as ordinals
+                    blocks=[(p + r"blocks\.(\d+)", None), (p + r"norm", (99999,))])
+
+
 def create_model(name, num_classes=5, pretrained=True, drop_path=0.1, img_size=None):
+    if name in RADIO_MODELS:        # any input that is a multiple of 16 runs natively (192 x 384 -> 12 x 24 patches); img_size unused
+        return RadioClassifier(name, num_classes=num_classes, pretrained=pretrained, drop_path=drop_path)
     import timm
     kw = {}
     if img_size is not None and name.split("_")[0] in ("vit", "deit3", "deit", "eva02", "swin", "swinv2"):
@@ -290,9 +365,76 @@ def predict_paths(model, paths, img_size, bs=128, tta=True, chunk=4096):
     return np.concatenate(outs)
 
 
+# ------------------------------------------------------------- LP-FT (round 38): linear-probe head as the fine-tuning start
+def _lp_zoom(x, f=0.7):
+    th = torch.zeros(x.shape[0], 2, 3, device=x.device)
+    th[:, 0, 0], th[:, 1, 1] = f, f
+    return F.grid_sample(x, F.affine_grid(th, x.shape, align_corners=False), mode="bilinear", padding_mode="border", align_corners=False)
+
+
+def _lp_centre_grey(x):
+    H, W = x.shape[2:]
+    m = torch.zeros(1, 1, H, W, device=x.device)
+    m[..., H // 5:4 * H // 5, W // 5:4 * W // 5] = 1
+    return x * m + 0.5 * (1 - m)
+
+
+LP_VIEWS = {"full": lambda x: x, "zoom70": _lp_zoom, "centre_grey": _lp_centre_grey}   # the frozen-feature probe's three views
+
+
+@torch.no_grad()
+def lp_features(model, arr, rows, img_size, bs=128, device="cuda"):
+    """Pre-logit features (what the classifier head reads) of the rows of a uint8 NHWC array under LP_VIEWS, each view applied at
+    the native frame and then resized as to_gpu_batch does; mean of the image and its h-flip. Returns {view: (n, d) float32}."""
+    model.eval()
+    out = {v: [] for v in LP_VIEWS}
+    for i in range(0, len(rows), bs):
+        x0 = torch.from_numpy(arr[rows[i:i + bs]]).to(device).permute(0, 3, 1, 2).float().div_(255)
+        for v, fn in LP_VIEWS.items():
+            x = normalize(F.interpolate(fn(x0), size=img_size, mode="bilinear", align_corners=False)).to(memory_format=torch.channels_last)
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                f = model.forward_head(model.forward_features(x), pre_logits=True).float()
+                f = f + model.forward_head(model.forward_features(x.flip(-1)), pre_logits=True).float()
+            out[v].append((f / 2).cpu().numpy())
+    return {v: np.concatenate(f) for v, f in out.items()}
+
+
+def fit_lp_head(model, arr, labels, rows, img_size, C=0.03, iters=300, device="cuda"):
+    """LP-FT step 1 (Kumar et al., ICLR 2022): multinomial logistic regression on the frozen pretrained features of the training
+    rows under the probe's three views (C = 0.03 and sklearn's objective on standardised features, as scripts/train_task4_probe.py),
+    folded into the model's own head: logits = f @ (W / sd) + (b - (mu / sd) @ W). Returns {"weight": (5, d), "bias": (5,)} (CPU)."""
+    feats = lp_features(model, arr, np.asarray(rows), img_size, device=device)
+    mu, sd = feats["full"].mean(0), feats["full"].std(0) + 1e-6
+    A = torch.from_numpy(np.vstack([(feats[v] - mu) / sd for v in LP_VIEWS])).to(device)
+    Y = torch.from_numpy(np.tile(np.asarray(labels)[rows], len(LP_VIEWS))).long().to(device)
+    W = torch.zeros(A.shape[1], 5, device=device, requires_grad=True)
+    b = torch.zeros(5, device=device, requires_grad=True)
+    opt = torch.optim.LBFGS([W, b], lr=1.0, max_iter=iters, history_size=20, line_search_fn="strong_wolfe", tolerance_grad=1e-6)
+
+    def closure():
+        opt.zero_grad()
+        loss = F.cross_entropy(A @ W + b, Y, reduction="sum") + 0.5 / C * (W ** 2).sum()
+        loss.backward()
+        return loss
+    opt.step(closure)
+    W, b = W.detach().cpu().double(), b.detach().cpu().double()
+    mu_t, sd_t = torch.from_numpy(mu).double(), torch.from_numpy(sd).double()
+    return {"weight": (W / sd_t[:, None]).T.float().contiguous(), "bias": (b - (mu_t / sd_t) @ W).float()}
+
+
+def set_head(model, head):
+    """Copy a {"weight", "bias"} head (fit_lp_head) into the model's classifier."""
+    clf = model.get_classifier()
+    with torch.no_grad():
+        clf.weight.copy_(head["weight"].to(clf.weight.device, clf.weight.dtype))
+        clf.bias.copy_(head["bias"].to(clf.bias.device, clf.bias.dtype))
+    return model
+
+
 def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epochs=10, bs=64,
                lr=2e-4, wd=0.05, label_smoothing=0.1, mix_prob=0.8, seed=42, log=print, ckpt_path=None, aug_kw=None,
-               class_balanced=False, layer_decay=None, grad_ckpt=False, warmup_epochs=1, sam_rho=0.0, mixstyle_stages=0):
+               class_balanced=False, layer_decay=None, grad_ckpt=False, warmup_epochs=1, sam_rho=0.0, mixstyle_stages=0, accum=1,
+               init_head=None, row_repeat=None):
     """Train one fold on the shared preloaded uint8 array `arr` (rows tr_idx); returns
     (model carrying the final EMA weights, history). With an empty `va_idx` it trains on all given
     rows without per-epoch validation (final Train+Val refit). class_balanced=True draws each epoch's rows with
@@ -303,10 +445,16 @@ def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epo
     (two forward / backward passes per step).
     mixstyle_stages > 0 (round 30, CNNs with `.stages`): MixStyle (Zhou et al., ICLR 2021) after the first n stages while training:
     with probability 0.5 per batch, each sample's channel mean / SD is mixed with another sample's (Beta(0.1, 0.1) weights).
-    The EMA copy is taken before the hooks are attached, so inference never mixes styles."""
+    The EMA copy is taken before the hooks are attached, so inference never mixes styles.
+    accum > 1 (round 37): gradient accumulation; each optimiser step still sees `bs` images, split into `accum` micro-batches of
+    bs / accum (same schedule, same effective batch, less GPU memory: DINOv2-L at 126x238 needs it on an 8 GB card).
+    init_head (round 38, LP-FT): a {"weight", "bias"} head from fit_lp_head, copied into the classifier before training (and before
+    the EMA copy), so fine-tuning starts from the linear probe instead of a random head and moves the pretrained features less."""
     from sklearn.metrics import f1_score
     from timm.utils import ModelEmaV3
 
+    if accum > 1 and (sam_rho > 0 or bs % accum):
+        raise ValueError("accum needs sam_rho = 0 and bs divisible by accum")
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     device = "cuda"
@@ -319,6 +467,8 @@ def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epo
     y_gpu = torch.as_tensor(labels, device=device)
 
     model = create_model(model_name, img_size=img_size).to(device).to(memory_format=torch.channels_last)
+    if init_head is not None:
+        set_head(model, init_head)
     ema = ModelEmaV3(model, decay=0.999)
     if grad_ckpt:   # after the EMA copy, so the returned EMA model runs inference without it
         model.set_grad_checkpointing(True)
@@ -343,7 +493,9 @@ def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epo
         for g in groups:                        # torch schedulers ignore timm's lr_scale, so bake it into lr
             g["lr"] = lr * g.pop("lr_scale", 1.0)
         opt = torch.optim.AdamW(groups, lr=lr, weight_decay=wd)
-    n_steps_ep = len(tr_idx) // bs
+    # round 40: row_repeat (ints aligned with tr_idx) repeats rows within each epoch (oversampling); None = every row once
+    rep_idx = np.repeat(tr_idx, row_repeat) if row_repeat is not None else tr_idx
+    n_steps_ep = len(rep_idx) // bs
     steps, warm = epochs * n_steps_ep, warmup_epochs * n_steps_ep      # linear warm-up, then cosine (default: 1 epoch)
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda s: (s + 1) / warm if s < warm else 0.5 * (1 + math.cos(math.pi * (s - warm) / max(1, steps - warm))))
@@ -358,21 +510,23 @@ def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epo
             w = 1.0 / np.bincount(labels[tr_idx], minlength=5)[labels[tr_idx]]
             perm = rng.choice(tr_idx, size=len(tr_idx), replace=True, p=w / w.sum())
         else:
-            perm = rng.permutation(tr_idx)
+            perm = rng.permutation(rep_idx)
         for b in range(n_steps_ep):
             idx = np.sort(perm[b * bs:(b + 1) * bs])
-            x = aug(to_gpu_batch(arr[idx], img_size, device))
-            y = y_gpu[torch.as_tensor(idx, device=device)]
-            if rng.random() < mix_prob:
-                x, yt = cutmix_or_mixup(x, y)
-            else:
-                yt = F.one_hot(y, 5).float()
-            yt = yt * (1 - label_smoothing) + label_smoothing / 5
-            x = x.to(memory_format=torch.channels_last)
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                loss = soft_ce(model(x).float(), yt)
             opt.zero_grad(set_to_none=True)
-            loss.backward()
+            for part in np.array_split(idx, accum):          # accum = 1: the whole batch at once, as before
+                x = aug(to_gpu_batch(arr[part], img_size, device))
+                y = y_gpu[torch.as_tensor(part, device=device)]
+                if rng.random() < mix_prob:
+                    x, yt = cutmix_or_mixup(x, y)
+                else:
+                    yt = F.one_hot(y, 5).float()
+                yt = yt * (1 - label_smoothing) + label_smoothing / 5
+                x = x.to(memory_format=torch.channels_last)
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    loss = soft_ce(model(x).float(), yt)
+                (loss / accum).backward()
+                tot += loss.item() * len(part)
             if sam_rho > 0:     # ascend to w + e, take the gradient there, come back to w
                 params = [p for p in model.parameters() if p.grad is not None]
                 with torch.no_grad():
@@ -391,7 +545,6 @@ def train_fold(model_name, arr, labels, tr_idx, va_idx, img_size=(160, 320), epo
             opt.step()
             sched.step()
             ema.update(model)
-            tot += loss.item() * len(idx)
             n += len(idx)
         if has_val:
             pv = predict_array(ema.module, va_arr, img_size, tta=False)

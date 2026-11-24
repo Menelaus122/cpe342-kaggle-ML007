@@ -89,3 +89,28 @@ def optimize_class_weights(y_true, proba, n_restarts=5, seed=0):
             best, best_v = res.fun, res.x
     w = np.exp(np.concatenate([[0.0], best_v]))
     return w / w.sum() * k, -best
+
+
+def optimize_class_weights_soft(y_true, proba, temp=0.1):
+    """Per-class multipliers maximising a SOFT macro-F1 of argmax_c(w_c * P_ic), by L-BFGS.
+
+    The raw macro-F1 is a step function of the multipliers, so a derivative-free search on it follows the noise of the rows next to
+    the decision boundaries. Here each row is assigned softly, q = softmax((log P + v) / temp), and F1_c = 2 sum(y_c q_c) /
+    (sum(q_c) + n_c) is smooth in v (v_0 = 0). Rounds 33-34: nested, the blend weight and multipliers chosen this way beat the
+    Powell search on ten stacker splits (experiments/claude/fr_r34_t2_calib.py, fv_r34_t2_soft_confirm.py); temp = 0.1 was fixed
+    before the first run. Returns (weights scaled to sum to k, soft score); score the hard decisions with macro_f1."""
+    from scipy.special import logsumexp
+    y_true = np.asarray(y_true)
+    k = proba.shape[1]
+    L = np.log(np.clip(proba, 1e-300, 1))
+    Y = np.eye(k)[y_true]
+    ny = Y.sum(0)
+
+    def loss(v):
+        Z = (L + np.concatenate([[0.0], v])[None, :]) / temp
+        q = np.exp(Z - logsumexp(Z, axis=1, keepdims=True))
+        return -float(np.mean(2 * (Y * q).sum(0) / (q.sum(0) + ny)))
+
+    res = minimize(loss, np.zeros(k - 1), method="L-BFGS-B")
+    w = np.exp(np.concatenate([[0.0], res.x]))
+    return w / w.sum() * k, -res.fun
