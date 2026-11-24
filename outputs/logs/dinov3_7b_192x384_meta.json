@@ -1,0 +1,58 @@
+{
+  "model": "vit_7b_patch16_dinov3.lvd1689m",
+  "hw": [
+    192,
+    384
+  ],
+  "dim": 16384,
+  "subblock_dims": [
+    4096,
+    4096,
+    4096,
+    4096
+  ],
+  "subblock_names": [
+    "mid_patch",
+    "last_patch",
+    "last_cls",
+    "last_std"
+  ],
+  "train_views": [
+    "full"
+  ],
+  "extract_test": false,
+  "n_train": 31546,
+  "gpu": "NVIDIA L4",
+  "batch_size": 32,
+  "timings": {
+    "train_full.npy": {
+      "n": 31546,
+      "seconds": 5846.7,
+      "img_per_s": 5.4
+    }
+  },
+  "screen": {
+    "R": {
+      "full": 0.9736591593941849,
+      "dark": 0.9378016849158876,
+      "plain": 0.9731858609808466,
+      "err_full": 739,
+      "err_dark": 221
+    },
+    "A": {
+      "full": 0.9725768054008841,
+      "dark": 0.9329908251335924,
+      "plain": 0.9723982729784053,
+      "err_full": 775,
+      "err_dark": 240
+    },
+    "B": {
+      "full": 0.9746052545005923,
+      "dark": 0.9412083282728434,
+      "plain": 0.9744625474294711,
+      "err_full": 711,
+      "err_dark": 208
+    }
+  },
+  "gate": "STOP: no >= +0.005 dark gain over 7B @ 144x272"
+}
