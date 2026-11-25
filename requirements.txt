@@ -1,5 +1,9 @@
-# Python 3.14. Install torch/torchvision from the CUDA index first:
+# Tested with Python 3.14.6 on Windows 11 (the versions below are the ones that produced the final submission).
+# Install PyTorch from the CUDA index first (or the CPU wheels: the five notebooks run on a CPU):
 #   pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cu130
+#   pip install -r requirements.txt
+
+# ---- notebooks (task1 ... task5)
 numpy==2.5.4
 pandas==3.1.0
 scipy==1.18.1
@@ -18,3 +22,9 @@ nbformat==5.11.1
 nbconvert==7.17.2
 ipykernel==7.4.0
 jupyter==1.1.1
+
+# ---- Task 4 training only (NVIDIA C-RADIOv3-L is loaded from the Hugging Face hub; not needed to run the notebooks)
+transformers==5.23.0
+huggingface_hub==2.4.0
+einops==0.8.2
+open_clip_torch==4.2.2

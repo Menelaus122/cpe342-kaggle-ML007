@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import f1_score
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -100,7 +100,7 @@ def main():
     w_bal4 = (0.2 / prior4)[y4]
     w4 = prior4 ** (-ALPHA4)
 
-    sub_v39_path = ROOT / "submission_v39.csv"
+    sub_v39_path = ROOT / "experiments" / "submissions" / "submission_v39.csv"
     assert sub_v39_path.exists(), f"Missing {sub_v39_path}"
     sub_v39 = pd.read_csv(sub_v39_path)
     sample_sub = pd.read_csv(SAMPLE_SUB)
@@ -168,7 +168,7 @@ def main():
     for col in ("task1", "task2", "task3", "task5"):
         assert np.array_equal(out_df[col].values, sub_v39[col].values), f"Unexpected change in {col}!"
 
-    out_path = ROOT / "submission_v41_p7b.csv"
+    out_path = ROOT / "experiments" / "submissions" / "submission_v41_p7b.csv"
     out_df.to_csv(out_path, index=False)
     sha = hashlib.sha256(out_path.read_bytes()).hexdigest()
 
@@ -177,7 +177,7 @@ def main():
     n_diff_v39_dark = int((diff_v39 & dark4_te).sum())
     print(f"Task 4 test diffs vs v39: {n_diff_v39} rows total ({n_diff_v39 / len(test_names):.2%}), of which {n_diff_v39_dark} are gated dark/low-contrast")
 
-    v38_candidates = [ROOT / "submission_v38.csv", ROOT / "versions" / "v38_LB0.86891" / "submission.csv"]
+    v38_candidates = [ROOT / "experiments" / "submissions" / "submission_v38.csv", ROOT / "experiments" / "versions" / "v38_LB0.86891" / "submission.csv"]
     v38_path = next((p for p in v38_candidates if p.exists()), None)
     if v38_path is not None:
         sub_v38 = pd.read_csv(v38_path)

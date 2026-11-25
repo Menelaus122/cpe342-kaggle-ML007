@@ -1,20 +1,26 @@
-# experiments/
+# experiments/ (not part of the final submission)
 
-Personal sandbox. Each teammate works in their own sub-folder (`experiments/<github-username>/`), so two people
-never edit the same scratch notebook.
+Everything here is research, trial and error, or history. The final code is in `task1/` … `task5/`, `src/` and `scripts/`
+(see the main [README](../README.md)), and none of it imports from this folder.
 
-* Anything goes here: quick notebooks, scripts, ablations, plots.
-* Code and notebooks are committed; generated data (`*.csv`, `*.npy`, `*.npz`, `outputs/`) is git-ignored.
-* Nothing in the main pipeline imports from `experiments/`.
-* When an idea works, move it into `src/` (and the notebook cells in `scripts/nb_part*.py`) through a pull request,
-  with its out-of-fold score in the PR description.
+| Folder / file | Contents |
+|---|---|
+| `claude/` | About 250 experiment scripts, one per check, named `<id>_r<round>_<task>_<topic>.py`, from 44 rounds of experiments. `claude/FINDINGS.md` records every check, its result and the decision, including everything that failed. |
+| `HISTORY.md` | Every Kaggle upload with its public score and what changed (v1–v41), and the list of version snapshots. |
+| `submissions/` | Every uploaded or prepared submission file (`submission_v<k>*.csv`). The final one, v41, is also `submission.csv` at the repository root. |
+| `versions/` | Frozen snapshots of the code, cached predictions and submission file of each upload, for roll-back. |
+| `colab/` | Colab notebooks of Task 4 members that were tried and not kept (DINOv2-g/14, a first DINOv3-L recipe, DINOv3-7B at 192×384 and with LoRA, multi-resolution TTA) and their builders. |
+| `scripts/` | One-off tools: `snapshot_version.py` (writes `versions/`), `build_v41_p7b_submission.py` (standalone check that v41 = v39 + the P_7b probe), `reorder_task4_test_cache.py` (moved old Task 4 caches to the re-released test order), `train_task4_probe.py` (the 7-backbone probe used in v28–v40, replaced by P_7b in v41). |
+| `master_pipeline/` | `CPE342_Master_Pipeline.ipynb`: all five tasks in one notebook, built from the same cells as the task notebooks. Its saved outputs are from the v32 execution. It is kept for reference and is not the deliverable. |
 
-To make the shared code importable from a notebook in `experiments/<you>/`:
+Scripts in `claude/` were written for the layout before the reorganisation of 25 Nov 2026. A few of them read files that have
+moved since then (see the table at the top of `HISTORY.md`). Data they generate (`claude/outputs/`, `*.npz`, `*.npy`, `*.csv`)
+is git-ignored. To import the shared code from a notebook in this folder:
 
 ```python
 import os, sys
 from pathlib import Path
-ROOT = Path.cwd().parents[1]          # experiments/<you>/ -> project root
+ROOT = Path.cwd().parents[1]          # experiments/claude/ -> project root
 os.chdir(ROOT); sys.path.insert(0, str(ROOT))
 from src import config as C, task1    # etc.
 ```
@@ -22,7 +28,7 @@ from src import config as C, task1    # etc.
 ## Test data in old experiment scripts (retired 2026-11-15)
 
 The TAs ruled on 2026-11-15 that test data, even unlabeled, may not be used to design the validation or to choose augmentation
-(test-time augmentation at prediction is allowed). The main pipeline (`src/`, `scripts/`, `task1/`-`task5/`) now uses test data
+(test-time augmentation at prediction is allowed). The final pipeline (`src/`, `scripts/`, `task1/`-`task5/`) uses test data
 only to produce the submission. The scripts below are kept as a record of what was run; they used test data for diagnostics,
 and some of those diagnostics fed decisions (see `claude/FINDINGS.md`, "Audit after the TA ruling"). They must not be used for
 new decisions.

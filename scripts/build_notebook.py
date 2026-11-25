@@ -1,7 +1,7 @@
-"""Assemble CPE342_Master_Pipeline.ipynb from the cell definitions in nb_part*.py.
+"""Assemble experiments/master_pipeline/CPE342_Master_Pipeline.ipynb (archived all-in-one notebook) from the cell definitions in nb_part*.py.
 
     python scripts/build_notebook.py            # write the notebook
-    jupyter nbconvert --to notebook --execute --inplace CPE342_Master_Pipeline.ipynb
+    jupyter nbconvert --to notebook --execute --inplace experiments/master_pipeline/CPE342_Master_Pipeline.ipynb
 """
 import importlib.util
 from pathlib import Path
@@ -23,7 +23,7 @@ def main():
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--parts", nargs="+", default=["nb_part1", "nb_part2"])
-    ap.add_argument("--out", default=str(ROOT / "CPE342_Master_Pipeline.ipynb"))
+    ap.add_argument("--out", default=str(ROOT / "experiments" / "master_pipeline" / "CPE342_Master_Pipeline.ipynb"))
     ap.add_argument("--reuse-outputs", action="store_true",
                     help="keep outputs of code cells whose source is unchanged in the existing --out notebook "
                          "(lets markdown edits land without re-executing)")

@@ -1,9 +1,9 @@
 """Generate self-contained Round 43 Colab notebooks:
-  1. colab/t4_colab_dinov3_7b_feat.ipynb   (DINOv3-7B @ 144x272 frozen 4-block multi-layer features + Linear Screen)
-  2. colab/t4_colab_multires_tta.ipynb     (Zero-Crop RoPE Multi-Res TTA for dinov3Hp_384 @ 160x304, 192x384, 224x432)
+  1. task4/colab/t4_colab_dinov3_7b_feat.ipynb   (DINOv3-7B @ 144x272 frozen 4-block multi-layer features + Linear Screen)
+  2. experiments/colab/t4_colab_multires_tta.ipynb     (Zero-Crop RoPE Multi-Res TTA for dinov3Hp_384 @ 160x304, 192x384, 224x432)
 
 Run from repo root:
-    python colab/build_r43_colab_nbs.py
+    python task4/colab/build_r43_colab_nbs.py
 """
 from pathlib import Path
 import nbformat as nbf
@@ -451,7 +451,7 @@ if AUTO_DISCONNECT:
 """
 
     nb = make_nb(title, [c1, c2, c3, c4, c5, c6, c7])
-    out = Path("colab/t4_colab_dinov3_7b_feat.ipynb")
+    out = Path("task4/colab/t4_colab_dinov3_7b_feat.ipynb")
     nbf.write(nb, out)
     return out
 
@@ -697,7 +697,7 @@ if AUTO_DISCONNECT:
 """
 
     nb = make_nb(title, [c1, c2, c3, c4, c5])
-    out = Path("colab/t4_colab_multires_tta.ipynb")
+    out = Path("experiments/colab/t4_colab_multires_tta.ipynb")
     nbf.write(nb, out)
     return out
 

@@ -401,7 +401,7 @@ def lp_features(model, arr, rows, img_size, bs=128, device="cuda"):
 
 def fit_lp_head(model, arr, labels, rows, img_size, C=0.03, iters=300, device="cuda"):
     """LP-FT step 1 (Kumar et al., ICLR 2022): multinomial logistic regression on the frozen pretrained features of the training
-    rows under the probe's three views (C = 0.03 and sklearn's objective on standardised features, as scripts/train_task4_probe.py),
+    rows under the probe's three views (C = 0.03 and sklearn's objective on standardised features, as experiments/scripts/train_task4_probe.py),
     folded into the model's own head: logits = f @ (W / sd) + (b - (mu / sd) @ W). Returns {"weight": (5, d), "bias": (5,)} (CPU)."""
     feats = lp_features(model, arr, np.asarray(rows), img_size, device=device)
     mu, sd = feats["full"].mean(0), feats["full"].std(0) + 1e-6

@@ -1,15 +1,15 @@
-"""Write colab/t4_colab_train.ipynb (run from the repo root):  python colab/build_t4_colab_nb.py"""
+"""Write task4/colab/t4_colab_train.ipynb (run from the repo root):  python task4/colab/build_t4_colab_nb.py"""
 import sys
 
 import nbformat as nbf
 
-PROFILE = sys.argv[1] if len(sys.argv) > 1 else "seed2"     # seed2 -> colab/t4_colab_train.ipynb; dinov3 -> colab/t4_colab_dinov3.ipynb;
+PROFILE = sys.argv[1] if len(sys.argv) > 1 else "seed2"     # seed2 -> task4/colab/t4_colab_train.ipynb; dinov3 -> experiments/colab/t4_colab_dinov3.ipynb;
 assert PROFILE in ("seed2", "dinov3", "dinov3b", "dinov3c", "radio3", "dinov3h", "dinov2g", "dinov3h384"), PROFILE   # dinov3h384 ->
-# colab/t4_colab_dinov3h384.ipynb (round 42: DINOv3 ViT-H+/16 at 192 x 384, layer decay 0.93, fold 0 only)   # dinov2g ->
-# colab/t4_colab_dinov2g.ipynb (round 42: DINOv2-g/14 at 126 x 238, DINOv2-L recipe with lr 2e-5 / layer decay 0.90, fold 0 only)   # dinov3b -> colab/t4_colab_dinov3b.ipynb (DINOv3 at lr 8e-5,
-# fold 0 only); dinov3c -> colab/t4_colab_dinov3c.ipynb (round 41: the same DINOv3 recipe at 192 x 384, fold 0 only); radio3 ->
-# colab/t4_colab_radio3.ipynb (round 42: NVIDIA C-RADIOv3-L at 192 x 384 with the dinov3c recipe, fold 0 only); dinov3h ->
-# colab/t4_colab_dinov3h.ipynb (round 42: DINOv3 ViT-H+/16 at 144 x 272 with the dinov3b recipe, fold 0 only)
+# task4/colab/t4_colab_dinov3h384.ipynb (round 42: DINOv3 ViT-H+/16 at 192 x 384, layer decay 0.93, fold 0 only)   # dinov2g ->
+# experiments/colab/t4_colab_dinov2g.ipynb (round 42: DINOv2-g/14 at 126 x 238, DINOv2-L recipe with lr 2e-5 / layer decay 0.90, fold 0 only)   # dinov3b -> task4/colab/t4_colab_dinov3b.ipynb (DINOv3 at lr 8e-5,
+# fold 0 only); dinov3c -> task4/colab/t4_colab_dinov3c.ipynb (round 41: the same DINOv3 recipe at 192 x 384, fold 0 only); radio3 ->
+# task4/colab/t4_colab_radio3.ipynb (round 42: NVIDIA C-RADIOv3-L at 192 x 384 with the dinov3c recipe, fold 0 only); dinov3h ->
+# task4/colab/t4_colab_dinov3h.ipynb (round 42: DINOv3 ViT-H+/16 at 144 x 272 with the dinov3b recipe, fold 0 only)
 
 nb = nbf.v4.new_notebook()
 md = lambda s: nb.cells.append(nbf.v4.new_markdown_cell(s.strip("\n")))
@@ -326,7 +326,7 @@ for c in nb.cells:
     if c.cell_type == "code" and c.source.startswith(("# ---- 1-epoch benchmark", "# ---- training:")):
         head, body = c.source.split("\n", 1)
         c.source = head + "\nif not TRAIN:\n    print('TRAIN = False: skipped')\nelse:\n" + "\n".join(("    " + l) if l.strip() else l for l in body.split("\n"))
-out_path = "colab/t4_colab_train.ipynb"
+out_path = "task4/colab/t4_colab_train.ipynb"
 if PROFILE == "seed2":
     soup_cell = nbf.v4.new_code_cell(r"""
 # ---- weight soup of the two DINOv2-L seeds (round 40; inference only, about 10-15 min on an A100) -------------------------------
@@ -348,7 +348,7 @@ if TRAIN and TAG == "dinov2L_hud70_s2":
     k = next(i for i, c in enumerate(nb.cells) if c.cell_type == "code" and c.source.lstrip().startswith("# ---- what to copy back"))
     nb.cells.insert(k, soup_cell)
 if PROFILE in ("dinov3", "dinov3b", "dinov3c", "radio3", "dinov3h", "dinov3h384"):
-    out_path = "colab/t4_colab_dinov3.ipynb"
+    out_path = "experiments/colab/t4_colab_dinov3.ipynb"
     nb.cells[0].source = nb.cells[0].source.replace(
         "# CPE342 Task 4: GPU training on Colab (round 40 step 3: a second seed of the v30 DINOv2-L member; all folds + full refit)",
         "# CPE342 Task 4: GPU training on Colab (round 40, revised: DINOv3 ViT-L/16 with v30's recipe; fold 0 + gate, then folds 1-4 + full refit)\n\n"
@@ -398,7 +398,7 @@ torch.cuda.empty_cache()
     k = next(i for i, c in enumerate(nb.cells) if c.cell_type == "code" and c.source.lstrip().startswith("# ---- 1-epoch benchmark"))
     nb.cells.insert(k, check)
 if PROFILE in ("dinov3b", "dinov3c", "radio3", "dinov3h", "dinov3h384"):
-    out_path = "colab/t4_colab_dinov3b.ipynb"
+    out_path = "task4/colab/t4_colab_dinov3b.ipynb"
     nb.cells[0].source = nb.cells[0].source.replace(
         "# CPE342 Task 4: GPU training on Colab (round 40, revised: DINOv3 ViT-L/16 with v30's recipe; fold 0 + gate, then folds 1-4 + full refit)",
         "# CPE342 Task 4: GPU training on Colab (round 40: DINOv3 ViT-L/16, new recipe lr 8e-5 / layer decay 0.90 / 18 epochs; fold 0 only)\n\n"
@@ -424,7 +424,7 @@ if PROFILE in ("dinov3b", "dinov3c", "radio3", "dinov3h", "dinov3h384"):
         src = src.replace(old, new)
     nb.cells[1].source = src
 if PROFILE in ("dinov3c", "radio3"):
-    out_path = "colab/t4_colab_dinov3c.ipynb"
+    out_path = "task4/colab/t4_colab_dinov3c.ipynb"
     nb.cells[0].source = nb.cells[0].source.replace(
         "# CPE342 Task 4: GPU training on Colab (round 40: DINOv3 ViT-L/16, new recipe lr 8e-5 / layer decay 0.90 / 18 epochs; fold 0 only)",
         "# CPE342 Task 4: GPU training on Colab (round 41: DINOv3 ViT-L/16 at 192x384 with v31's recipe; fold 0 only)\n\n"
@@ -452,7 +452,7 @@ if PROFILE in ("dinov3c", "radio3"):
     assert nb.cells[k].source.count("(9 x 17 = 153 patches + class + registers)") == 1
     nb.cells[k].source = nb.cells[k].source.replace("(9 x 17 = 153 patches + class + registers)", "(12 x 24 = 288 patches + class + registers)")
 if PROFILE == "radio3":
-    out_path = "colab/t4_colab_radio3.ipynb"
+    out_path = "task4/colab/t4_colab_radio3.ipynb"
     nb.cells[0].source = nb.cells[0].source.replace(
         "# CPE342 Task 4: GPU training on Colab (round 41: DINOv3 ViT-L/16 at 192x384 with v31's recipe; fold 0 only)",
         "# CPE342 Task 4: GPU training on Colab (round 42: NVIDIA C-RADIOv3-L at 192x384 with the DINOv3 recipe; fold 0 only)\n\n"
@@ -526,7 +526,7 @@ del m, out, x
 torch.cuda.empty_cache()
 """.strip("\n")
 if PROFILE in ("dinov3h", "dinov3h384"):
-    out_path = "colab/t4_colab_dinov3h.ipynb"
+    out_path = "task4/colab/t4_colab_dinov3h.ipynb"
     nb.cells[0].source = nb.cells[0].source.replace(
         "# CPE342 Task 4: GPU training on Colab (round 40: DINOv3 ViT-L/16, new recipe lr 8e-5 / layer decay 0.90 / 18 epochs; fold 0 only)",
         "# CPE342 Task 4: GPU training on Colab (round 42: DINOv3 ViT-H+/16 at 144x272 with the dinov3b recipe; fold 0 only)\n\n"
@@ -554,7 +554,7 @@ if PROFILE in ("dinov3h", "dinov3h384"):
         src = src.replace(old, new)
     nb.cells[1].source = src
 if PROFILE == "dinov2g":
-    out_path = "colab/t4_colab_dinov2g.ipynb"
+    out_path = "experiments/colab/t4_colab_dinov2g.ipynb"
     nb.cells[0].source = nb.cells[0].source.replace(
         "# CPE342 Task 4: GPU training on Colab (round 40 step 3: a second seed of the v30 DINOv2-L member; all folds + full refit)",
         "# CPE342 Task 4: GPU training on Colab (round 42: DINOv2-g/14 at 126x238; fold 0 only)\n\n"
@@ -627,7 +627,7 @@ torch.cuda.empty_cache()
     k = next(i for i, c in enumerate(nb.cells) if c.cell_type == "code" and c.source.lstrip().startswith("# ---- 1-epoch benchmark"))
     nb.cells.insert(k, smoke)
 if PROFILE == "dinov3h384":
-    out_path = "colab/t4_colab_dinov3h384.ipynb"
+    out_path = "task4/colab/t4_colab_dinov3h384.ipynb"
     nb.cells[0].source = nb.cells[0].source.replace(
         "# CPE342 Task 4: GPU training on Colab (round 42: DINOv3 ViT-H+/16 at 144x272 with the dinov3b recipe; fold 0 only)",
         "# CPE342 Task 4: GPU training on Colab (round 42: DINOv3 ViT-H+/16 at 192x384, layer decay 0.93; fold 0 only)\n\n"
